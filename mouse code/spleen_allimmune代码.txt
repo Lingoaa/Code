@@ -1,0 +1,143 @@
+library(Seurat)
+library(ggplot2)
+library(harmony)
+library(SCP)
+library(DoubletFinder)
+aa<- load("NTimmu_spleen.RData")
+DefaultAssay(scRNA_spleen) <- "RNA"
+scRNA_spleen[["percent.mt"]] <- PercentageFeatureSet(scRNA_spleen, pattern = "^mt-")
+scRNA_spleen[['percent.ribo']] <- PercentageFeatureSet(scRNA_spleen, pattern = "^Rp[sl]")
+Idents(scRNA_spleen) = scRNA_spleen$hash.ID
+scRNA_spleen <- subset(scRNA_spleen,subset =  nCount_RNA < 30000 & nFeature_RNA>200 & nFeature_RNA < 6000 & percent.mt < 10 & percent.ribo < 40)
+scRNA_spleen <- NormalizeData(scRNA_spleen, normalization.method = "LogNormalize", scale.factor = 10000)
+scRNA_spleen <- FindVariableFeatures(scRNA_spleen, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(scRNA_spleen)
+scRNA_spleen <- ScaleData(scRNA_spleen, features = all.genes)
+scRNA_spleen <- RunPCA(scRNA_spleen, features = VariableFeatures(object = scRNA_spleen))
+scRNA_spleen <- FindNeighbors(scRNA_spleen, reduction = "pca", dims = 1:20) %>% FindClusters(resolution = 0.1)
+scRNA_spleen <- RunUMAP(scRNA_spleen, dims = 1:20)
+#过滤双细胞
+combo<- scRNA_spleen
+sweep.res.list <- paramSweep(combo, PCs = 1:15, sct = F)
+sweep.stats <- summarizeSweep(sweep.res.list, GT = FALSE)
+bcmvn <- find.pK(sweep.stats)
+pK_bcmvn <- bcmvn$pK[which.max(bcmvn$BCmetric)] %>% as.character() %>% as.numeric()
+homotypic.prop <- modelHomotypic(combo$seurat_clusters)   
+nExp_poi <- round(0.02 * ncol(combo))
+nExp_poi.adj <- round(nExp_poi * (1 - homotypic.prop))
+combo2<- doubletFinder(combo, 
+                            PCs = 1:5, 
+                            pN = 0.25, 
+                            pK = pK_bcmvn, 
+                            nExp = nExp_poi.adj, 
+                            sct = F)
+scRNA_spleen<- combo2[,combo2$DF.classifications_0.25_0.005_463=="Singlet"]
+saveRDS(scRNA_spleen,"spleen_all_filter.rds")
+scRNA_spleen<- readRDS("spleen_all_filter.rds")
+scRNA_spleen <- NormalizeData(scRNA_spleen, normalization.method = "LogNormalize", scale.factor = 10000)
+scRNA_spleen=FindVariableFeatures(scRNA_spleen, selection.method = "vst", nfeatures = 2000)
+scRNA_spleen <- ScaleData(scRNA_spleen, features = all.genes)
+scRNA_spleen <- RunPCA(scRNA_spleen, features = VariableFeatures(object = scRNA_spleen))
+scRNA_spleen <-  RunHarmony(scRNA_spleen, group.by.vars="hash.ID", plot_convergence = F)
+scRNA_spleen <- FindNeighbors(scRNA_spleen, reduction = "harmony", dims = 1:20) 
+scRNA_spleen <-FindClusters( scRNA_spleen,resolution = 0.1)
+scRNA_spleen <- RunUMAP(scRNA_spleen, reduction = "harmony",reduction.name="umap", dims = 1:20)
+new.cluster.ids <- c("0" = "B cells",
+                                "1" = "T cells",
+                                "2" = "Monocytes",
+                                "3" = "Neutrophils",
+                                "4" = "Monocytes",
+                                "5" = "Macrophages",
+                                "6"="NK",
+                                "7" = "DC",
+                                "8" = "Mast cells",
+                                "9" = "B cells")
+names(new.cluster.ids) <- levels(scRNA_spleen)
+scRNA_spleen <- RenameIdents(scRNA_spleen, new.cluster.ids)
+scRNA_spleen$cell_type <- scRNA_spleen@active.ident
+saveRDS(scRNA_spleen, file = "all_spleen_imm_seurat.rds")
+rds<- readRDS( "all_spleen_imm_seurat.rds")
+scRNA_spleen<- rds
+pdf("allspleen_umap_1.pdf",width=5.9,height=4,onefile=F)
+SCP::CellDimPlot(
+  srt=scRNA_spleen,group.by=c("cell_type"),label=T,
+  reduction="UMAP",theme_use="theme_scp",
+palette="Set3",
+label.bg="black",label_insitu=T,label.size=4.2
+)+theme_test()+theme(legend.text=element_text(size=9),legend.key.size=unit(0.6,'cm'),
+axis.text=element_text(size=11,color="black"))
+dev.off()
+scRNA_spleen$orig.ident<-gsub("ko","KO",scRNA_spleen$orig.ident)
+scRNA_spleen$orig.ident<- gsub("wt","WT",scRNA_spleen$orig.ident)
+pdf("allspleen_umap_2.pdf",width=5.5,height=4,onefile=F)
+CellDimPlot(
+  srt=scRNA_spleen,group.by=c("orig.ident"),label=F,
+  reduction="UMAP",theme_use="theme_scp",
+palette="Set2",
+label.bg="black",label_insitu=T,label.size=4.2
+)+theme_test()+theme(legend.text=element_text(size=12),legend.key.size=unit(0.6,'cm'),
+axis.text=element_text(size=11,color="black"))
+dev.off()
+pdf("allspleen_umap_3.pdf",width=5.5,height=4,onefile=F)
+CellDimPlot(
+  srt=scRNA_spleen,group.by=c("group"),label=F,
+  reduction="UMAP",theme_use="theme_scp",
+palette="Accent",
+label.bg="black",label_insitu=T,label.size=4.2
+)+theme_test()+theme(legend.text=element_text(size=12),legend.key.size=unit(0.6,'cm'),
+axis.text=element_text(size=11,color="black"))
+dev.off()
+scRNA_spleen$hash.ID<- factor(scRNA_spleen$hash.ID,levels=c("N-KO-1","N-KO-2","N-KO-3","N-WT-1","N-WT-2","N-WT-3","T-KO-1", "T-KO-2","T-WT-1","T-WT-2"))
+pdf("allspleen_sample_celltype_percent.pdf",width=5.5,height=4)
+CellStatPlot(scRNA_spleen, stat.by = "cell_type", group.by = "hash.ID", palette="Set3")
+dev.off()
+
+genes_to_check = c("Cd79b","Cd79a",   "Cd3d","Cd3e",
+                   "S100a8","S100a9",
+                   "Fcgr3a","G0s2",
+                   "C1qc","C1qa",
+                   "Klrd1","Nkg7",
+                   "Itgax","Xcr1",
+                   "Gata2", "Cpa3")
+ht<-GroupHeatmap(
+  srt=scRNA_spleen,
+  features=genes_to_check,
+  group.by=c("cell_type"),
+  heatmap_palette="YlOrRd",
+  show_row_names=F,row_names_side="left",
+  add_dot=TRUE,add_reticle=TRUE,label_size = 13
+)
+pdf("allspleen_celltype_dot.pdf",width=6.5,height=5.5)
+print(ht$plot)
+dev.off()
+
+pdf("allspleen_umap_markerBcell1.pdf",width=3.5,height=3.5)
+FeatureDimPlot(
+  srt = scRNA_spleen, features = c("Cd79a"),
+  reduction = "UMAP", theme_use = "theme_scp"
+)+theme_test()+theme(legend.text=element_text(size=9),
+axis.text=element_text(size=11,color="black"))
+dev.off()
+pdf("allspleen_umap_markerBcell2.pdf",width=3.5,height=3.5)
+FeatureDimPlot(
+  srt = scRNA_spleen, features = c("Cd79b"),
+  reduction = "UMAP", theme_use = "theme_scp"
+)+theme_test()+theme(legend.text=element_text(size=9),
+axis.text=element_text(size=11,color="black"))
+dev.off()
+####tumor
+rds<- readRDS( "all_spleen_imm_seurat.rds")
+scRNA_spleen<- rds[,rds$group=="tumor"]
+pdf("tumorspleen_umap_celltype.pdf",width=5.9,height=4,onefile=F)
+SCP::CellDimPlot(
+  srt=scRNA_spleen,group.by=c("cell_type"),label=T,
+  reduction="UMAP",theme_use="theme_scp",
+palette="Set3",
+label.bg="black",label_insitu=T,label.size=4.2
+)+theme_test()+theme(legend.text=element_text(size=9),legend.key.size=unit(0.6,'cm'),
+axis.text=element_text(size=11,color="black"))
+dev.off()
+scRNA_spleen$hash.ID<- factor(scRNA_spleen$hash.ID,levels=c("T-KO-1", "T-KO-2","T-WT-1","T-WT-2"))
+pdf("tumorspleen_sample_celltype_percent.pdf",width=4.1,height=3)
+CellStatPlot(scRNA_spleen, stat.by = "cell_type", group.by = "hash.ID", palette="Set3")+theme(legend.text=element_text(size=11),legend.spacing.y = unit(9, "cm"))
+dev.off()

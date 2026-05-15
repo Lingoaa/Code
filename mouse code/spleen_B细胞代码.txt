@@ -1,0 +1,102 @@
+library(Seurat)
+library(ggplot2)
+library(harmony)
+library(SCP)
+rds<- readRDS("NT_spleen_bc_seurat.rds")
+pdf("Bcellspleen_umap_1.pdf",width=5.7,height=4,onefile=F)
+CellDimPlot(
+  srt=rds,group.by=c("cell_type"),label=T,
+  reduction="UMAP",theme_use="theme_scp",
+palette="Set1",
+label.bg="black",label_insitu=T,label.size=4.2
+)+theme_test()+theme(legend.text=element_text(size=9),legend.key.size=unit(0.6,'cm'),
+axis.text=element_text(size=11,color="black"))
+dev.off()
+rds$hash.ID<- factor(rds$hash.ID,levels=c(unique(rds$hash.ID)[1:6],unique(rds$hash.ID)[9:10],unique(rds$hash.ID)[8:7]))
+pdf("Bcellspleen_umap_2.pdf",width=5.5,height=4.5,onefile=F)
+CellDimPlot(
+  srt=rds,group.by=c("hash.ID"),label=F,
+  reduction="UMAP",theme_use="theme_scp",
+palette="Set1",
+label.bg="black",label_insitu=T,label.size=4.2
+)+theme_test()+theme(legend.text=element_text(size=11),legend.key.size=unit(0.6,'cm'),
+axis.text=element_text(size=11,color="black"))
+dev.off()
+rds$hash.ID<- factor(rds$hash.ID,levels=c(unique(rds$hash.ID)[1:6],unique(rds$hash.ID)[9:10],unique(rds$hash.ID)[8:7]))
+pdf("Bcellspleen_sample_celltype_percent.pdf",width=5.5,height=4)
+CellStatPlot(rds, stat.by = "cell_type", group.by = "hash.ID", palette="Set1")+theme(legend.text=element_text(size=11),legend.spacing.y = unit(9, "cm"))
+dev.off()
+
+genes_to_check = c("Ighd","Ccr7",
+                   "Cr2","Dtx1",
+                   "Mif","Nme1",
+                   "Vpreb3","Cd24a",
+                   "Ctla4","Cd44",
+                   "Ifi27l2a","Ifit3",
+                   "Fcer2a","Zfp318",
+                   "Jchain","Iglc1")
+ht<-GroupHeatmap(
+  srt=rds,
+  features=genes_to_check,
+  group.by=c("cell_type"),
+  heatmap_palette="YlOrRd",
+  show_row_names=F,row_names_side="left",
+  add_dot=TRUE,add_reticle=TRUE,label_size = 13
+)
+pdf("Bcellspleen_celltype_dot.pdf",width=6.5,height=4.5)
+print(ht$plot)
+dev.off()
+pdf("Bcellspleen_celltype_Dhx9.pdf",width=5.5,height=4)
+FeatureStatPlot(rds, stat.by = c("Dhx9"), group.by = "cell_type")+theme(legend.text=element_text(size=11),legend.spacing.y = unit(9, "cm"))
+dev.off()
+##follicular BC 中WT和KO差异通路富集
+rds2<- rds[,rds$cell_type=="Follicular BC"]
+rds2$group2<- substr(rds2$orig.ident,3,4)
+rds2$group2<- ifelse(rds2$group2=="wt","WT","KO")
+rds2 <- RunDEtest(srt = rds2, group_by = "group2", fc.threshold = 1, only.pos = FALSE)
+rds2 <- RunEnrichment(
+  srt = rds2, group_by = "group2", db = "GO_BP", species = "Mus_musculus",
+  DE_threshold = "avg_log2FC > log2(1) & p_val_adj < 0.05"
+)
+path<- rds2@tools$Enrichment_group2_wilcox$results$`KO-GO_BP`@result
+
+pdf("FBC_ko_pathway.pdf",width=11,height=6,onefile=F)
+EnrichmentPlot(
+  srt = rds2, group_by = "group2", group_use = "KO",
+  plot_type = "network",id_use=path$ID[c(86,94,128,216,205,211)]
+)+theme(legend.text=element_text(size=11),legend.key.size=unit(1.2,'cm'))
+dev.off()
+pdf("FBC_wt_pathway.pdf",width=11,height=7.5,onefile=F)
+EnrichmentPlot(
+  srt = rds2, group_by = "group2", group_use = "WT",
+  plot_type = "network"
+)+theme(legend.text=element_text(size=11),legend.key.size=unit(1.2,'cm'))
+dev.off()
+####T-ko和t-wt中FBC的比较
+rds2<- rds2[,rds2$orig.ident %in% c("T-wt","T-ko")]
+rds2$orig.ident<- ifelse(rds2$orig.ident=="T-ko","T-KO","T-WT")
+pdf("FBC-T-gene.pdf",width=12,height=3.5)
+FeatureStatPlot(rds2, stat.by = c("Unc93b1", "Cd74","H2-Aa"), group.by = "orig.ident",comparisons = list(c("T-WT","T-KO")),split.by="orig.ident",palette="Set2",sig_labelsize = 5.5)
+dev.off()
+
+rds2 <- RunDEtest(srt = rds2, group_by = "orig.ident", fc.threshold = 1, only.pos = FALSE)
+rds2 <- RunEnrichment(
+  srt = rds2, group_by = "orig.ident", db = "GO_BP", species = "Mus_musculus",
+  DE_threshold = "avg_log2FC > log2(1) & p_val_adj < 0.05"
+)
+path<- rds2@tools$Enrichment_orig.ident_wilcox$results$`T-KO-GO_BP`@result
+
+pdf("FBC_Tko_pathway.pdf",width=10,height=7.5,onefile=F)
+EnrichmentPlot(
+  srt = rds2, group_by = "orig.ident", group_use = "T-KO",
+  plot_type = "network",id_use=path$ID[c(9,97,15,121,295,310,303)]
+)+theme(legend.text=element_text(size=11),legend.key.size=unit(1.2,'cm'))
+dev.off()
+pdf("FBC_Twt_pathway.pdf",width=11,height=8.5,onefile=F)
+EnrichmentPlot(
+  srt = rds2, group_by = "orig.ident", group_use = "T-WT",
+  plot_type ="network"
+)+theme(legend.text=element_text(size=11),legend.key.size=unit(1.2,'cm'))
+dev.off()
+
+

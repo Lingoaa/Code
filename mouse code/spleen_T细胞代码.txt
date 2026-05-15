@@ -1,0 +1,135 @@
+library(Seurat)
+library(ggplot2)
+library(harmony)
+library(SCP)
+rds1<- readRDS("T_TC_seurat.rds")
+rds2<- readRDS("N_TC_seurat.rds")
+rds<- merge(rds1,rds2)
+scRNA_spleen<- rds
+scRNA_spleen <- NormalizeData(scRNA_spleen, normalization.method = "LogNormalize", scale.factor = 10000)
+scRNA_spleen=FindVariableFeatures(scRNA_spleen, selection.method = "vst", nfeatures = 2000)
+scRNA_spleen <- ScaleData(scRNA_spleen)
+scRNA_spleen <- RunPCA(scRNA_spleen, features = VariableFeatures(object = scRNA_spleen))
+scRNA_spleen <-  RunHarmony(scRNA_spleen, group.by.vars="hash.ID", plot_convergence = F)
+scRNA_spleen <- FindNeighbors(scRNA_spleen, reduction = "harmony", dims = 1:20) 
+scRNA_spleen <-FindClusters( scRNA_spleen,resolution = 0.1)
+scRNA_spleen <- RunUMAP(scRNA_spleen, reduction = "harmony",reduction.name="umap", dims = 1:20)
+rds <- scRNA_spleen
+saveRDS(rds,"spleen_T_seurat.rds")
+rds<- readRDS("spleen_T_seurat.rds")
+rds$cell_type<- gsub("Cd4","CD4",rds$cell_type)
+rds$cell_type<- gsub("Cd8","CD8",rds$cell_type)
+pdf("tcellspleen_umap_1.pdf",width=8,height=4.5,onefile=F)
+CellDimPlot(
+  srt=rds,group.by=c("cell_type"),label=T,
+  reduction="UMAP",theme_use="theme_scp",
+palette="Accent",
+label.bg="black",label_insitu=T,label.size=4.2
+)+theme_test()+theme(legend.text=element_text(size=12),legend.key.size=unit(0.6,'cm'),
+axis.text=element_text(size=11,color="black"))
+dev.off()
+
+pdf("tcellspleen_umap_2.pdf",width=5.5,height=4,onefile=F)
+CellDimPlot(
+  srt=rds,group.by=c("hash.ID"),label=F,
+  reduction="UMAP",theme_use="theme_blank",
+palette="Accent",add_density = T,
+density_filled = TRUE, density_filled_palette = "Reds",
+label.bg="black",label_insitu=T,label.size=4.2
+)
+dev.off()
+
+pdf("tcellspleen_umap_3.pdf",width=5.5,height=4,onefile=F)
+CellDimPlot(
+  srt=rds,group.by=c("group"),label=F,
+  reduction="UMAP",theme_use="theme_blank",
+palette="Accent",add_density = T,
+density_filled = TRUE, density_filled_palette = "Reds",
+label.bg="black",label_insitu=T,label.size=4.2
+)
+dev.off()
+
+
+pdf("tcellspleen_umap_marker.pdf",width=9,height=3)
+FeatureDimPlot(
+  srt =rds, features = c("Cd3d", "Cd3e","Cd3g"),
+  reduction = "UMAP", theme_use = "theme_blank"
+)
+dev.off()
+
+rds2<- rds[,rds$orig.ident %in% c("T-wt","T-ko")]
+rds2$orig.ident<- ifelse(rds2$orig.ident=="T-ko","T-KO","T-WT")
+pdf("tcell_gene_compare.pdf",width=9,height=7)
+FeatureStatPlot(rds2, stat.by = c("Bcl2", "Ubb","Il7r","Zfp36l2"), group.by = "orig.ident",comparisons =list(c("T-WT","T-KO")),split.by="orig.ident",palette="Set2",sig_labelsize = 6)
+dev.off()
+
+genes_to_check = c("Ly6c1","Igfbp4","Ccr7","Selenop",
+                                       "Dapl1","Rgcc",
+                                       "Ly6c2","Ccl5","Nkg7","Ctsw",
+                                       "Lgals1", "S100a4", "Itgb1",
+                                       "Foxp3","Ctla4",
+                                       "Cd40lg","Icos","Il4")
+ht<-GroupHeatmap(
+  srt=rds,
+  features=genes_to_check,
+  group.by=c("cell_type"),
+  heatmap_palette="YlOrRd",
+  show_row_names=F,row_names_side="left",
+  add_dot=TRUE,add_reticle=TRUE
+)
+pdf("tcellspleen_celltype_dot.pdf",width=6.5,height=4.5)
+print(ht$plot)
+dev.off()
+
+rds$hash.ID<- factor(rds$hash.ID,levels=c("N-KO-1","N-KO-2","N-KO-3","N-WT-1","N-WT-2","N-WT-3","T-KO-1", "T-KO-2","T-WT-1","T-WT-2"))
+pdf("tcellspleen_sample_celltype_percent.pdf",width=7.5,height=4)
+CellStatPlot(rds, stat.by = "cell_type", group.by = "hash.ID", palette="Accent")+theme(legend.text=element_text(size=11),legend.spacing.y = unit(9, "cm"))
+dev.off()
+
+rds2<- rds[,rds$orig.ident %in% c("N-wt","N-ko")]
+pdf("tcellspleen_group_celltype_percent.pdf",width=6.5,height=4,onefile=F)
+CellStatPlot(rds2, stat.by = c("cell_type", "orig.ident"), plot_type = "sankey")
+dev.off()
+##差异通路
+rds2<- rds2[,rds2$cell_type=="Naive CD4+ TC"]
+rds2 <- RunDEtest(srt = rds2, group_by = "orig.ident", fc.threshold = 1, only.pos = FALSE)
+rds2 <- RunEnrichment(
+  srt = rds2, group_by = "orig.ident", db = "GO_BP", species = "Mus_musculus",
+  DE_threshold = "avg_log2FC > log2(1) & p_val_adj < 0.05"
+)
+path<- rds2@tools$Enrichment_orig.ident_wilcox$results$`N-ko-GO_BP`@result
+path$Description[grep("CD8",path$Description)]
+pdf("NaiveCD4T_Nko_pathway.pdf",width=8,height=5.5,onefile=F)
+EnrichmentPlot(
+  srt = rds2, group_by = "orig.ident", group_use = "N-ko",
+  plot_type = "network",id_use=path$ID[c(19,30,42,21,52,58,72,156,34)]
+)
+dev.off()
+
+pdf("NaiveCD4T_Nwt_pathway.pdf",width=8,height=5.5,onefile=F)
+EnrichmentPlot(
+  srt =  rds2, group_by = "orig.ident", group_use = "N-wt",
+  plot_type = "network"
+)
+dev.off()
+
+
+rds2<- rds[,rds$orig.ident %in% c("T-wt","T-ko")]
+rds2<- rds2[,rds2$cell_type=="Naive CD8+ TC"]
+rds2$orig.ident<- ifelse(rds2$orig.ident=="T-wt","T-WT","T-KO")
+rds2 <- RunDEtest(srt = rds2, group_by = "orig.ident", fc.threshold = 1, only.pos = FALSE)
+rds2 <- RunEnrichment(
+  srt = rds2, group_by = "orig.ident", db = "GO_BP", species = "Mus_musculus",
+  DE_threshold = "avg_log2FC > log2(1) & p_val_adj < 0.05"
+)
+path<- rds2@tools$Enrichment_orig.ident_wilcox$results$`T-KO-GO_BP`@result
+path$Description[grep("T cell",path$Description)]
+path$Description[grep("apoptotic",path$Description)]
+pdf("NaiveCD8T_Tko_pathway.pdf",width=9,height=7.5,onefile=F)
+EnrichmentPlot(
+  srt = rds2, group_by = "orig.ident", group_use = "T-KO",
+  plot_type = "network",id_use=path$ID[c(94,143,195,369,573,1233,51,105,1085)]
+)
+dev.off()
+
+

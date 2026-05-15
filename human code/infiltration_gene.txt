@@ -1,0 +1,1490 @@
+# ====================== 步骤1：环境配置与包加载 ======================
+required_packages <- c("Seurat", "Matrix", "dplyr", "data.table", "stringr", 
+                       "ggplot2", "patchwork", "harmony", "ggpubr", "effsize")
+new_packages <- required_packages[!(required_packages %in% installed.packages()[,"Package"])]
+if (length(new_packages) > 0) {
+  install.packages(new_packages, dependencies = TRUE, repos = "https://mirrors.tuna.tsinghua.edu.cn/CRAN/")
+}
+library(Seurat)
+library(Matrix)
+library(dplyr)
+library(tidyr)
+library(data.table)
+library(stringr)
+library(ggplot2)
+library(patchwork)
+library(harmony)
+library(ggpubr)
+library(effsize)
+# 设置核心路径（适配你新的data/infiltration目录）
+setwd("D:/document/code/DHX9")
+data_path <- "./data/infiltration"  # 所有原始数据的统一路径
+output_path <- "./result/05_Infiltration_Global"  # 新输出路径
+
+# 创建子目录结构
+dir.create(output_path, recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(output_path, "01_Correlation"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(output_path, "02_CD8T_DEG"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(output_path, "03_CD8T_KEGG"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(output_path, "04_CD8T_GSEA"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(output_path, "05_Bcell_DEG"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(output_path, "06_Bcell_KEGG"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(output_path, "07_Bcell_GSEA"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(output_path, "08_Granzyme_Violin"), showWarnings = FALSE, recursive = TRUE)
+
+# ====================== 步骤2：读取infiltration目录下的所有样本 ======================
+cat("步骤2：读取data/infiltration目录下的所有样本...\n")
+all_sample_list <- list()  # 统一存储所有样本，无分组
+filter_min_cells <- 5    
+filter_min_features <- 300  
+
+# ---------------------- 第一步：读取目录下的子目录样本（如GSM5075660_p007t.tsv） ----------------------
+cat("  读取子目录格式样本（TSV）...\n")
+nr_subdirs <- list.dirs(data_path, full.names = FALSE, recursive = FALSE)
+nr_gsm_list <- str_extract(nr_subdirs, "GSM\\d+")  # 提取子目录中的GSM编号
+nr_gsm_list <- nr_gsm_list[!is.na(nr_gsm_list)]    # 过滤非GSM目录
+cat("    识别到子目录样本数：", length(nr_gsm_list), "\n")
+
+for (gsm in nr_gsm_list) {
+  cat("    读取：", gsm, "\n")
+  gsm_subdirs <- nr_subdirs[str_detect(nr_subdirs, gsm)]
+  if (length(gsm_subdirs) == 0) {
+    warning(paste("    ", gsm, "无对应目录，跳过"))
+    next
+  }
+  folder_path <- file.path(data_path, gsm_subdirs[1])
+  
+  counts <- NULL
+  # 优先读取10x格式（barcodes/features/matrix）
+  barcode_file <- list.files(folder_path, pattern = "barcodes\\.tsv\\.gz$", full.names = TRUE)
+  feature_file <- list.files(folder_path, pattern = "features\\.tsv\\.gz$", full.names = TRUE)
+  matrix_file <- list.files(folder_path, pattern = "matrix\\.mtx\\.gz$", full.names = TRUE)
+  
+  if (length(barcode_file) == 1 & length(feature_file) == 1 & length(matrix_file) == 1) {
+    tryCatch({
+      counts <- Read10X(data.dir = dirname(barcode_file))
+      cat("        10x格式读取成功\n")
+    }, error = function(e) {
+      cat("       10x读取失败：", e$message, "\n")
+      counts <- NULL
+    })
+  }
+  
+  # 降级读取TSV格式（子目录主要是TSV）
+  if (is.null(counts)) {
+    tsv_files <- list.files(folder_path, pattern = "*.tsv.gz$|*.tsv$", full.names = TRUE)
+    if (length(tsv_files) > 0) {
+      tryCatch({
+        counts_tsv <- fread(tsv_files[1], sep = "\t", header = TRUE, data.table = FALSE)
+        rownames(counts_tsv) <- counts_tsv[, 1]
+        counts <- Matrix(as.matrix(counts_tsv[, -1]), sparse = TRUE)
+        cat("        TSV格式读取成功\n")
+      }, error = function(e) {
+        cat("       TSV读取失败：", e$message, "\n")
+        counts <- NULL
+      })
+    }
+  }
+  
+  if (!is.null(counts)) {
+    rownames(counts) <- gsub("_", "-", rownames(counts))
+    gene_expr_count <- rowSums(counts > 0)
+    counts_filtered <- counts[gene_expr_count >= filter_min_cells, ]
+    
+    if (nrow(counts_filtered) > 0 & ncol(counts_filtered) > 0) {
+      seu <- CreateSeuratObject(
+        counts = counts_filtered, 
+        project = "Global_Analysis",
+        min.cells = filter_min_cells,
+        min.features = filter_min_features,
+        assay = "RNA"
+      )
+      seu$GSM_ID <- gsm  # 仅保留样本ID，无分组
+      seu$Tissue_Type <- "Tumor"
+      
+      all_sample_list[[gsm]] <- seu
+      cat("        已添加，当前列表长度：", length(all_sample_list), "\n")
+    }
+    rm(counts, counts_filtered, gene_expr_count)
+    gc(verbose = FALSE, full = TRUE)
+  } else {
+    warning(paste("    ", gsm, "无有效数据，跳过"))
+  }
+}
+
+# ---------------------- 第二步：读取目录下直接的mtx.gz文件（如GSM6213977_*.mtx.gz） ----------------------
+cat("  读取直接的mtx.gz格式样本...\n")
+r_matrix_files <- list.files(data_path, pattern = "GSM.*matrix\\.mtx\\.gz$", full.names = TRUE)
+r_gsm_list <- unique(str_extract(r_matrix_files, "GSM\\d+"))  # 提取mtx文件中的GSM编号
+cat("    识别到mtx.gz样本数：", length(r_gsm_list), "\n")
+
+for (gsm in r_gsm_list) {
+  # 跳过已读取的子目录样本（避免重复）
+  if (gsm %in% names(all_sample_list)) {
+    cat("    ", gsm, "已读取，跳过\n")
+    next
+  }
+  
+  cat("    读取：", gsm, "\n")
+  barcode_file <- list.files(data_path, pattern = paste0(gsm, ".*barcodes\\.tsv\\.gz$"), full.names = TRUE)
+  feature_file <- list.files(data_path, pattern = paste0(gsm, ".*features\\.tsv\\.gz$"), full.names = TRUE)
+  matrix_file <- list.files(data_path, pattern = paste0(gsm, ".*matrix\\.mtx\\.gz$"), full.names = TRUE)
+  
+  if (length(barcode_file) == 1 & length(feature_file) == 1 & length(matrix_file) == 1) {
+    tryCatch({
+      counts_matrix <- readMM(matrix_file)
+      barcodes <- readLines(gzfile(barcode_file))
+      features <- read.delim(gzfile(feature_file), header = FALSE, stringsAsFactors = FALSE)
+      gene_names <- make.unique(features[, 2])
+      
+      rownames(counts_matrix) <- gene_names
+      colnames(counts_matrix) <- barcodes
+      
+      gene_expr_count <- rowSums(counts_matrix > 0)
+      counts_filtered <- counts_matrix[gene_expr_count >= filter_min_cells, ]
+      
+      if (nrow(counts_filtered) > 0 & ncol(counts_filtered) > 0) {
+        seu <- CreateSeuratObject(
+          counts = counts_filtered, 
+          project = "Global_Analysis",
+          min.cells = filter_min_cells,
+          min.features = filter_min_features,
+          assay = "RNA"
+        )
+        seu$GSM_ID <- gsm
+        seu$Tissue_Type <- "Tumor"
+        
+        all_sample_list[[gsm]] <- seu
+        cat("        已读取，当前列表长度：", length(all_sample_list), "\n")
+      }
+    }, error = function(e) {
+      cat("       读取失败：", e$message, "\n")
+    })
+    rm(counts_matrix, counts_filtered, gene_expr_count)
+    gc(verbose = FALSE, full = TRUE)
+  } else {
+    warning(paste("    ", gsm, "文件不完整，跳过"))
+  }
+}
+
+# ====================== 步骤3：合并所有样本（无分组） ======================
+cat("步骤3：合并所有样本...\n")
+if (length(all_sample_list) == 0) {
+  stop(" 无有效样本，分析终止！")
+}
+
+# 分批合并（避免内存溢出，适配大量样本）
+batch_size <- 2
+batches <- split(names(all_sample_list), ceiling(seq_along(all_sample_list)/batch_size))
+batch_seu <- list()
+
+for (i in seq_along(batches)) {
+  batch_gsm <- batches[[i]]
+  cat("  合并批次", i, "：", paste(batch_gsm, collapse = ","), "\n")
+  
+  current_batch <- all_sample_list[batch_gsm]
+  if (length(current_batch) == 1) {
+    batch_seu[[i]] <- current_batch[[1]]
+  } else {
+    batch_seu[[i]] <- merge(
+      x = current_batch[[1]],
+      y = current_batch[-1],
+      add.cell.ids = batch_gsm
+    )
+  }
+  current_batch <- NULL
+  gc(verbose = FALSE, full = TRUE)
+}
+
+# 合并所有批次为最终Seurat对象
+all_seu_raw <- batch_seu[[1]]
+batch_seu <- batch_seu[-1]
+if (length(batch_seu) > 0) {
+  for (batch in batch_seu) {
+    all_seu_raw <- merge(all_seu_raw, batch)
+    gc(verbose = FALSE, full = TRUE)
+  }
+}
+
+rm(all_sample_list, batch_seu)
+gc(verbose = FALSE, full = TRUE)
+cat("  所有样本合并完成：总细胞数 =", ncol(all_seu_raw), "\n")
+
+# ====================== 步骤4：预处理（无分组校正） ======================
+cat("步骤4：数据预处理...\n")
+# QC过滤（适配大数据量，适度放宽条件）
+all_seu_raw <- PercentageFeatureSet(all_seu_raw, pattern = "^MT-", col.name = "percent.mt")
+all_seu_filtered <- subset(
+  all_seu_raw,
+  subset = nFeature_RNA > 200 & nFeature_RNA < 8000 & 
+    nCount_RNA > 500 & percent.mt < 15
+)
+cat("  过滤后有效细胞数：", ncol(all_seu_filtered), "\n")
+
+# 归一化+缩放
+all_seu_filtered <- NormalizeData(all_seu_filtered, normalization.method = "LogNormalize", scale.factor = 10000)
+all_seu_filtered <- FindVariableFeatures(all_seu_filtered, selection.method = "vst", nfeatures = 3000)
+all_seu_filtered <- ScaleData(all_seu_filtered, vars.to.regress = c("nCount_RNA", "percent.mt"), verbose = FALSE)
+
+# 批次校正（仅按样本ID校正，无任何分组）
+all_seu_filtered <- RunPCA(all_seu_filtered, features = VariableFeatures(all_seu_filtered), npcs = 60, verbose = FALSE)
+all_seu_harmony <- RunHarmony(all_seu_filtered, group.by.vars = "GSM_ID", dims = 1:50, verbose = FALSE)
+
+# 降维+聚类
+all_seu_harmony <- RunUMAP(all_seu_harmony, reduction = "harmony", dims = 1:40, verbose = FALSE)
+all_seu_harmony <- FindNeighbors(all_seu_harmony, reduction = "harmony", dims = 1:40, verbose = FALSE)
+all_seu_harmony <- FindClusters(all_seu_harmony, resolution = 0.6, verbose = FALSE)
+
+# ====================== 步骤5：细胞类型注释 ======================
+cat("步骤5：细胞类型注释...\n")
+# 通用免疫细胞标记基因（覆盖所有主要类型）
+cell_type_markers <- list(
+  "CD8+ T细胞" = c("CD8A", "CD8B", "GZMB", "IFNG"),
+  "CD4+ T细胞" = c("CD4", "IL7R", "CCR7"),
+  "CD4+ Treg" = c("FOXP3", "IL2RA", "CTLA4"),
+  "B细胞" = c("CD19", "MS4A1", "CD79A", "CD79B"),
+  "巨噬细胞" = c("CD68", "CSF1R", "CD14", "MRC1"),
+  "NK细胞" = c("NCAM1", "KLRD1", "GNLY"),
+  "树突状细胞" = c("CD1C", "FCER1A", "LAMP3"),
+  "中性粒细胞" = c("S100A8", "S100A9", "CSF3R"),
+  "内皮细胞" = c("PECAM1", "VWF"),
+  "成纤维细胞" = c("COL1A1", "DCN", "ACTA2"),
+  "肿瘤细胞" = c("EPCAM", "KRT18", "KRT19")
+)
+
+# 基于标记基因打分注释
+for (cell_type in names(cell_type_markers)) {
+  all_seu_harmony <- AddModuleScore(
+    all_seu_harmony,
+    features = list(cell_type_markers[[cell_type]]),
+    name = paste0(cell_type, "_score")
+  )
+}
+
+# 选择最高分作为细胞类型
+score_cols <- grep("_score", colnames(all_seu_harmony@meta.data), value = TRUE)
+
+cell_type_scores <- all_seu_harmony@meta.data[, score_cols]
+# colnames(cell_type_scores) <- names(cell_type_markers)
+# all_seu_harmony$cell_type <- colnames(cell_type_scores)[max.col(cell_type_scores)]
+all_seu_harmony$cell_type <- gsub("_score.*", "", colnames(cell_type_scores)[max.col(cell_type_scores)])
+cat("  细胞类型注释完成！各类型细胞数：\n")
+print(table(all_seu_harmony$cell_type))
+
+
+# ====================== 步骤6：核心分析（整体DHX9与CD8+T浸润） ======================
+cat("步骤6：B细胞DHX9表达与CD8+T浸润整体分析...\n")
+
+# 6.1 提取B细胞，计算样本级DHX9平均表达
+b_cell_seu <- subset(all_seu_harmony, subset = cell_type == "B细胞")
+dhx9_b_cell <- FetchData(b_cell_seu, vars = c("DHX9", "GSM_ID"))
+
+# 样本级DHX9平均表达 + 高低分组（中位数分割）
+sample_dhx9_mean <- dhx9_b_cell %>%
+  group_by(GSM_ID) %>%
+  summarise(
+    DHX9_mean = mean(DHX9),
+    B_cell_count = n(),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    DHX9_group = ifelse(DHX9_mean > median(DHX9_mean), "High", "Low"),
+    DHX9_group = factor(DHX9_group, levels = c("Low", "High"))
+  )
+
+# 6.2 计算样本级CD8+T细胞浸润比例
+sample_cell_stats <- all_seu_harmony@meta.data %>%
+  group_by(GSM_ID) %>%
+  summarise(
+    Total_cell_count = n(),
+    CD8T_cell_count = sum(cell_type == "CD8+ T细胞"),
+    .groups = "drop"
+  ) %>%
+  mutate(CD8T_infiltration = CD8T_cell_count / Total_cell_count)
+
+# 6.3 合并数据并过滤有效样本
+analysis_df <- merge(
+  sample_dhx9_mean,
+  sample_cell_stats,
+  by = "GSM_ID",
+  all.x = TRUE
+) %>%
+  filter(!is.na(CD8T_infiltration))
+
+# 6.4 统计检验（仅整体，无分组）
+stat_test <- wilcox.test(CD8T_infiltration ~ DHX9_group, data = analysis_df)
+eff_size <- cohen.d(CD8T_infiltration ~ DHX9_group, data = analysis_df)
+
+# 输出统计结果
+cat("\n=== 整体分析统计结果 ===\n")
+cat("DHX9高表达组CD8+T浸润比例均值：", round(mean(analysis_df$CD8T_infiltration[analysis_df$DHX9_group=="High"]), 4), "\n")
+cat("DHX9低表达组CD8+T浸润比例均值：", round(mean(analysis_df$CD8T_infiltration[analysis_df$DHX9_group=="Low"]), 4), "\n")
+cat("Wilcoxon p值：", round(stat_test$p.value, 4), "\n")
+cat("Cohen's d效应量：", round(eff_size$estimate, 2), "\n")
+
+
+# ====================== 步骤7：提取DHX9高低组的CD8+T细胞并关联分组信息 ======================
+cat("\n=== 步骤7：提取DHX9高低组的CD8+T细胞并关联分组信息 ===\n")
+# 1. 提取纯CD8+T细胞（Seurat通用函数）
+cd8t_seu <- subset(all_seu_harmony, subset = cell_type == "CD8..T细胞")
+cat("  总CD8+T细胞数：", ncol(cd8t_seu), "\n")
+
+# 2. 构建GSM-ID-分组映射关系（基础R原生函数，无依赖）
+dhx9_group_map <- analysis_df[, c("GSM_ID", "DHX9_group")]
+dhx9_group_map <- dhx9_group_map[!duplicated(dhx9_group_map$GSM_ID), ]
+cat("  可映射的样本数（GSM_ID）：", nrow(dhx9_group_map), "\n")
+
+# 3. 基础R实现行名转列（原生函数，无tidyr依赖）
+cd8t_meta <- cd8t_seu@meta.data
+cd8t_meta$cell_barcode <- rownames(cd8t_meta)
+
+# 4. 合并分组信息（基础R原生函数）
+cd8t_meta_merged <- merge(cd8t_meta, dhx9_group_map, by = "GSM_ID", all.x = TRUE)
+rownames(cd8t_meta_merged) <- cd8t_meta_merged$cell_barcode
+cd8t_meta_merged$cell_barcode <- NULL
+cd8t_seu@meta.data <- cd8t_meta_merged
+
+# 5. 验证分组列添加（基础R原生函数）
+if ("DHX9_group" %in% colnames(cd8t_seu@meta.data)) {
+  cat("    DHX9_group列已成功添加\n")
+  group_dist <- table(cd8t_seu$DHX9_group, useNA = "ifany")
+  cat("  分组分布：\n")
+  print(group_dist)
+} else {
+  stop("   DHX9_group列添加失败！")
+}
+
+# 6. 过滤无NA细胞（基础R原生索引，替代Seurat::subset）
+cd8t_seu_filtered <- cd8t_seu[, !is.na(cd8t_seu$DHX9_group)]
+cd8t_seu_filtered$DHX9_group <- factor(cd8t_seu_filtered$DHX9_group, levels = c("Low", "High"))
+cat("  过滤后有效CD8+T细胞数：", ncol(cd8t_seu_filtered), "\n")
+cat("    步骤7完成，分组关联成功\n")
+
+# ====================== 步骤8：差异基因分析（DHX9 High vs Low） ======================
+cat("\n=== 步骤8：CD8+T细胞DHX9 High vs Low 差异基因分析 ===\n")
+# 归一化校验（Seurat通用函数）
+if (!"normalized.data" %in% names(cd8t_seu_filtered@assays$RNA)) {
+  cd8t_seu_filtered <- NormalizeData(cd8t_seu_filtered, normalization.method = "LogNormalize", scale.factor = 10000, verbose = FALSE)
+}
+# 计算差异基因（Seurat通用函数）
+cd8t_deg <- FindMarkers(
+  object = cd8t_seu_filtered,
+  ident.1 = "High", ident.2 = "Low",
+  group.by = "DHX9_group",
+  logfc.threshold = 0.25, min.pct = 0.1,
+  adjust.method = "fdr", test.use = "wilcox",
+  verbose = FALSE
+)
+# library(DESeq2)
+# # 提取IFNG和GZMB的原始差异数据（取消所有筛选阈值，保留真实指标）
+# gene_check <- FindMarkers(
+#   object = cd8t_seu_filtered,
+#   ident.1 = "High", ident.2 = "Low",
+#   group.by = "DHX9_group",
+#   logfc.threshold = 0,  # 取消log2FC筛选，保留真实值
+#   min.pct = 0,          # 取消表达占比筛选，保留真实值
+#   adjust.method = "hochberg",
+#   test.use = "MAST",
+#   features = c("IFNG", "GZMB"), # 仅提取这两个基因，快速运行
+#   verbose = FALSE
+# )
+# gene_check
+# # 添加基因名列，方便查看
+# gene_check$gene <- rownames(gene_check)
+# # 输出核心指标（直接对应筛选阈值）
+# cat("===== IFNG/GZMB 原始差异指标（直接对比筛选阈值）=====\n")
+# cat("筛选阈值：|avg_log2FC| ≥ 0.25 、 至少一组pct ≥ 0.1\n")
+# cat("pct.1=DHX9 High组表达占比，pct.2=DHX9 Low组表达占比\n\n")
+# print(gene_check[, c("gene", "avg_log2FC", "pct.1", "pct.2", "p_val_adj")], row.names = FALSE)
+
+# 整理结果（tidyverse通用函数）
+cd8t_deg$gene <- rownames(cd8t_deg)
+cd8t_deg_sig <- cd8t_deg %>% filter(p_val_adj < 0.05 & abs(avg_log2FC) > 0.25) %>% arrange(p_val_adj)
+up_genes <- cd8t_deg_sig %>% filter(avg_log2FC > 0) %>% pull(gene)
+down_genes <- cd8t_deg_sig %>% filter(avg_log2FC < 0) %>% pull(gene)
+# 统计与保存（基础R原生函数）
+cat("  显著差异基因数：", nrow(cd8t_deg_sig), "\n")
+cat("  上调基因数：", length(up_genes), " | 下调基因数：", length(down_genes), "\n")
+write.csv(cd8t_deg, file.path(output_path, "02_CD8T_DEG", "CD8T_DHX9_All_DEG.csv"), row.names = FALSE)
+write.csv(cd8t_deg_sig, file.path(output_path, "02_CD8T_DEG", "CD8T_DHX9_Sig_DEG.csv"), row.names = FALSE)
+cat("    差异基因结果已保存\n")
+
+
+
+
+# ====================== 步骤8.6：CD8+T细胞DHX9 Low vs High KEGG富集分析 ======================
+cat("\n=== 步骤8.6：CD8+T细胞DHX9 Low vs High KEGG富集分析 ===\n")
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(ggplot2)
+library(enrichplot)
+
+# 1. 准备Low vs High的差异基因（适配对比方向）
+# 取反avg_log2FC，确保代表Low - High（与火山图一致）
+cd8t_deg_low_vs_high <- cd8t_deg %>%
+  dplyr::mutate(avg_log2FC = -avg_log2FC) %>%  # 核心：适配Low vs High
+  dplyr::filter(p_val_adj < 0.05 & abs(avg_log2FC) > 0.25)  # 显著差异基因
+
+# 2. 基因ID转换（SYMBOL→ENTREZID，KEGG富集必需）
+cd8t_sig_genes <- cd8t_deg_low_vs_high$gene
+cd8t_entrez <- bitr(
+  cd8t_sig_genes,
+  fromType = "SYMBOL",
+  toType = "ENTREZID",
+  OrgDb = org.Hs.eg.db,
+  drop = TRUE  # 去除转换失败的基因
+)
+
+# 3. KEGG通路富集分析（人类hsa，适配Low vs High）
+cd8t_kegg_low_high <- enrichKEGG(
+  gene = cd8t_entrez$ENTREZID,
+  organism = "hsa",  # 人类
+  pvalueCutoff = 0.1,  # 放宽阈值保证有富集结果
+  pAdjustMethod = "fdr",
+  qvalueCutoff = 0.2
+)
+
+# 4. 处理富集结果（适配Low vs High的上下调标注）
+if (nrow(cd8t_kegg_low_high) > 0) {
+  # 提取上下调基因列表（Low vs High）
+  cd8t_up_genes_low <- cd8t_deg_low_vs_high %>% filter(avg_log2FC > 0) %>% pull(gene)  # Low上调
+  cd8t_down_genes_low <- cd8t_deg_low_vs_high %>% filter(avg_log2FC < 0) %>% pull(gene) # Low下调
+  
+  # 为KEGG通路标注上下调方向（基于基因重叠数）
+  cd8t_kegg_result <- as.data.frame(cd8t_kegg_low_high) %>%
+    dplyr::mutate(
+      # 通路基因转换为SYMBOL
+      pathway_genes = sapply(strsplit(geneID, "/"), function(x) {
+        mapIds(org.Hs.eg.db, x, "SYMBOL", "ENTREZID", multiVals = "first")
+      }),
+      # 计算与上下调基因的重叠数
+      up_overlap = sapply(pathway_genes, function(x) length(intersect(x, cd8t_up_genes_low))),
+      down_overlap = sapply(pathway_genes, function(x) length(intersect(x, cd8t_down_genes_low))),
+      # 标注方向（Low vs High）
+      direction = ifelse(up_overlap > down_overlap, "Up (Low > High)", "Down (Low < High)")
+    ) %>%
+    dplyr::select(-pathway_genes)
+  
+  # 5. 绘制KEGG富集气泡图（学术级，适配Low vs High）
+  cd8t_kegg_dotplot <- dotplot(
+    cd8t_kegg_low_high,
+    showCategory = 15,  # 显示前15个通路
+    color = "p.adjust",  # 颜色代表校正后p值
+    size = "Count",      # 大小代表基因数
+    title = "CD8+T细胞 DHX9 Low vs High KEGG通路富集气泡图"
+  ) +
+    scale_color_gradient(low = "#2E86AB", high = "#E63946") +  # 适配Low vs High配色
+    labs(
+      x = "Rich Factor",
+      y = "KEGG Pathway",
+      color = "Adjusted P-value",
+      size = "Gene Count"
+    ) +
+    theme_bw() +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+      axis.text.y = element_text(size = 8)
+    )
+  
+  # 6. 绘制KEGG富集柱状图
+  cd8t_kegg_barplot <- barplot(
+    cd8t_kegg_low_high,
+    showCategory = 15,
+    color = "p.adjust",
+    title = "CD8+T细胞 DHX9 Low vs High KEGG通路富集柱状图"
+  ) +
+    scale_color_gradient(low = "#2E86AB", high = "#E63946") +
+    theme_bw() +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+      axis.text.y = element_text(size = 8)
+    )
+  
+  # 7. 保存KEGG富集图表（适配Low vs High命名）
+  ggsave(
+    file.path(output_path, "03_CD8T_KEGG", "CD8T_DHX9_Low_vs_High_KEGG_Dotplot.pdf"),
+    cd8t_kegg_dotplot,
+    width = 10,
+    height = 8,
+    dpi = 300
+  )
+  ggsave(
+    file.path(output_path, "03_CD8T_KEGG", "CD8T_DHX9_Low_vs_High_KEGG_Barplot.pdf"),
+    cd8t_kegg_barplot,
+    width = 10,
+    height = 8,
+    dpi = 300
+  )
+  
+  # 8. 保存KEGG富集结果表格
+  write.csv(
+    cd8t_kegg_result,
+    file.path(output_path, "03_CD8T_KEGG", "CD8T_DHX9_Low_vs_High_KEGG_Result.csv"),
+    row.names = FALSE
+  )
+  
+  cat("  CD8+T细胞Low vs High KEGG富集分析完成！\n")
+  cat("    气泡图保存：", file.path(output_path, "03_CD8T_KEGG", "CD8T_DHX9_Low_vs_High_KEGG_Dotplot.pdf"), "\n")
+  cat("    柱状图保存：", file.path(output_path, "03_CD8T_KEGG", "CD8T_DHX9_Low_vs_High_KEGG_Barplot.pdf"), "\n")
+  cat("    结果表格保存：", file.path(output_path, "03_CD8T_KEGG", "CD8T_DHX9_Low_vs_High_KEGG_Result.csv"), "\n")
+} else {
+  cat("   CD8+T细胞Low vs High无显著KEGG富集通路（放宽阈值后仍无）\n")
+  # 生成空白图避免流程中断
+  pdf(file.path(output_path, "03_CD8T_KEGG", "CD8T_DHX9_Low_vs_High_KEGG_Empty.pdf"), width = 10, height = 8)
+  plot(1,1,type="n",xlab="",ylab="",main="CD8+ T Cell Low vs High No KEGG Enrichment Signal")
+  dev.off()
+}
+
+
+
+
+
+
+
+
+
+# ====================== 步骤8.5：CD8+T细胞DHX9高低组差异基因火山图绘制 ======================
+cat("\n=== 步骤8.5：绘制CD8+T细胞DHX9 Low vs High 差异基因火山图 ===\n")
+library(ggplot2)
+library(dplyr)
+library(ggrepel) # 用于标注基因名，若未安装会自动提示
+
+# 检查并安装ggrepel（火山图标注基因名必备）
+if (!require(ggrepel)) {
+  install.packages("ggrepel", repos = "https://mirrors.tuna.tsinghua.edu.cn/CRAN/")
+  library(ggrepel)
+}
+
+# 1. 准备火山图数据（核心：调整为Low vs High对比方向，处理p值为0的情况）
+t_volcano_data <- cd8t_deg %>%
+  mutate(
+    # 核心修改1：将avg_log2FC取反，使其代表 Low - High 的差异（原是High - Low）
+    avg_log2FC = -avg_log2FC,
+    # 替换p_val_adj=0为极小值（1e-100），避免log10(0)报错
+    p_val_adj = ifelse(p_val_adj == 0, 1e-100, p_val_adj),
+    # 计算-log10(校正后p值)作为Y轴
+    neg_log10_padj = -log10(p_val_adj),
+    # 核心修改2：分组逻辑适配Low vs High（avg_log2FC>0代表Low>High）
+    group = case_when(
+      avg_log2FC > 0.25 & p_val_adj < 0.05 ~ "上调 (Low > High)",
+      avg_log2FC < -0.25 & p_val_adj < 0.05 ~ "下调 (Low < High)",
+      TRUE ~ "不显著"
+    ),
+    # 标记需要标注的关键基因（筛选条件：|log2FC|>0.5且padj<0.01，避免标注过多）
+    label = ifelse(
+      (avg_log2FC > 0.5 & p_val_adj < 0.01) | (avg_log2FC < -0.5 & p_val_adj < 0.01),
+      gene,
+      ""
+    )
+  )
+
+# 2. 统计各组基因数量（便于核对结果）
+t_group_stats <- table(t_volcano_data$group)
+cat("  CD8+T细胞火山图分组统计：\n")
+print(t_group_stats)
+
+# 3. 绘制火山图（适配Low vs High对比方向，红色为Low>High上调基因）
+t_volcano_plot <- ggplot(t_volcano_data, aes(x = avg_log2FC, y = neg_log10_padj, color = group)) +
+  # 绘制散点（调整大小和透明度，避免点重叠）
+  geom_point(size = 1.2, alpha = 0.7) +
+  # 标注关键基因名（ggrepel自动避免标签重叠）
+  geom_text_repel(
+    aes(label = label),
+    size = 3,
+    color = "black",
+    max.overlaps = 20, # 限制最大标注数量，防止图表拥挤
+    box.padding = 0.5, # 标签与点的距离
+    segment.color = "gray50" # 连接线颜色
+  ) +
+  # 配色不变：红色=上调（Low>High），蓝色=下调（Low<High）
+  scale_color_manual(values = c(
+    "上调 (Low > High)" = "#E63946",  # 红色：Low组高于High组
+    "下调 (Low < High)" = "#2E86AB",  # 蓝色：Low组低于High组
+    "不显著" = "#9E9E9E"              # 灰色：不显著
+  )) +
+  # 添加显著性阈值虚线（log2FC±0.25、-log10(padj)=1.3）
+  geom_vline(xintercept = c(-0.25, 0.25), linetype = "dashed", color = "gray30", linewidth = 0.5) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "gray30", linewidth = 0.5) +
+  # 核心修改3：标题和坐标轴标签适配Low vs High
+  labs(
+    x = "log2(Fold Change) (Low vs High)",
+    y = "-log10(Adjusted P-value)",
+    title = "CD8+T细胞 DHX9低表达组 vs 高表达组 差异基因火山图",
+    color = "差异基因分组"
+  ) +
+  # 学术风格美化（无网格线、标题居中、字体适配论文）
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10),
+    legend.title = element_text(size = 11, face = "bold"),
+    legend.position = "right",
+    panel.grid = element_blank() # 去除网格线，提升图表简洁度
+  )
+
+# 4. 保存火山图（文件名适配Low vs High，避免和旧文件混淆）
+ggsave(
+  file.path(output_path, "02_CD8T_DEG", "CD8T_DHX9_Low_vs_High_Volcano.pdf"),
+  t_volcano_plot,
+  width = 10,
+  height = 8,
+  dpi = 300
+)
+ggsave(
+  file.path(output_path, "02_CD8T_DEG", "CD8T_DHX9_Low_vs_High_Volcano.png"),
+  t_volcano_plot,
+  width = 10,
+  height = 8,
+  dpi = 300
+)
+
+cat("  CD8+T细胞火山图已保存至：\n")
+cat("    PDF格式：", file.path(output_path, "CD8T_DHX9_Low_vs_High_Volcano.pdf"), "\n")
+cat("    PNG格式：", file.path(output_path, "CD8T_DHX9_Low_vs_High_Volcano.png"), "\n")
+# ====================== 前置补充：定义CD8+T细胞GSEA候选通路（解决up_pathway_names未定义） ======================
+# 基于CD8+T显著差异基因先做KEGG富集，获取候选通路（核心：定义up_pathway_names的来源）
+cat("\n=== 补充步骤：CD8+T细胞差异基因KEGG富集（获取GSEA候选通路） ===\n")
+# 差异基因ID转换（clusterProfiler需要ENTREZID）
+cd8t_sig_gene_entrez <- bitr(cd8t_deg_sig$gene, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+# KEGG富集（人类hsa，放宽阈值保证有候选通路）
+cd8t_kegg_enrich <- enrichKEGG(
+  gene = cd8t_sig_gene_entrez$ENTREZID,
+  organism = "hsa",
+  pvalueCutoff = 0.2,  # 放宽阈值获取足够候选通路
+  pAdjustMethod = "fdr",
+  qvalueCutoff = 0.2
+)
+# 通路名标准化（转换为MSigDB格式：KEGG_大写_下划线）
+if (nrow(cd8t_kegg_enrich) > 0) {
+  cd8t_kegg_pathway_names <- cd8t_kegg_enrich$Description
+  cd8t_kegg_pathway_msig <- gsub("[ /-]", "_", cd8t_kegg_pathway_names) %>% 
+    toupper() %>% 
+    paste0("KEGG_", .)
+} else {
+  # 无富集时用MSigDB全KEGG通路兜底
+  msig_kegg_all <- msigdbr(species = "Homo sapiens", category = "C2") %>% filter(grepl("^KEGG_", gs_name))
+  cd8t_kegg_pathway_msig <- unique(msig_kegg_all$gs_name)
+  cat(" ️ CD8+T无显著KEGG富集通路，使用MSigDB全KEGG通路（", length(cd8t_kegg_pathway_msig), "个）\n")
+}
+# 定义核心变量（解决up_pathway_names未定义）
+up_pathway_names <- cd8t_kegg_pathway_msig[1:min(10, length(cd8t_kegg_pathway_msig))] # 取前10个作为上调候选
+down_pathway_names <- setdiff(cd8t_kegg_pathway_msig, up_pathway_names)[1:min(10, length(setdiff(cd8t_kegg_pathway_msig, up_pathway_names)))] # 剩余取前10个作为下调候选
+cat("已定义CD8+T GSEA候选通路：上调", length(up_pathway_names), "个 | 下调", length(down_pathway_names), "个\n")
+
+# ====================== 步骤9：CD8+T细胞DHX9高低组 KEGG GSEA分析======================
+set.seed(2026)
+library(fgsea)
+library(ggplot2)
+library(dplyr)
+library(msigdbr)
+
+# 1. 构建CD8+T基因排名向量（复用差异分析结果）
+rank_vector <- cd8t_deg$avg_log2FC
+names(rank_vector) <- cd8t_deg$gene
+rank_vector <- sort(rank_vector, decreasing = TRUE)
+cat("  开始分析：单细胞差异基因总数 =", length(rank_vector), "\n")
+
+# 2. 复用环境变量 + 还原原始字符串
+up_original_str <- sub("^KEGG_", "", up_pathway_names)
+down_original_str <- sub("^KEGG_", "", down_pathway_names)
+cat("  原始上调通路数 =", length(up_original_str), "\n")
+cat("  原始下调通路数 =", length(down_original_str), "\n")
+
+# 3. 定义提取具体通路名函数
+extract_real_pathway <- function(chaotic_str) {
+  split_parts <- strsplit(chaotic_str, "\",\"")[[1]]
+  real_pathway <- if (length(split_parts)>=4) split_parts[4] else chaotic_str
+  real_pathway <- gsub("\"$", "", real_pathway)
+  real_pathway <- gsub(" |-|___", "_", real_pathway)
+  real_pathway <- gsub("_+", "_", real_pathway)
+  real_pathway <- toupper(real_pathway)
+  return(real_pathway)
+}
+
+# 4. 提取+标准化通路名
+up_real_names <- na.omit(unique(sapply(up_original_str, extract_real_pathway)))
+down_real_names <- na.omit(unique(sapply(down_original_str, extract_real_pathway)))
+up_final_names <- paste0("KEGG_", up_real_names)
+down_final_names <- paste0("KEGG_", down_real_names)
+
+cat("\n  最终提取【上调具体通路名】（前5个）：\n")
+print(head(up_final_names, 5))
+cat("  最终提取【下调具体通路名】（前5个）：\n")
+print(head(down_final_names, 5))
+cat("  可匹配上调具体通路数 =", length(up_final_names), "\n")
+cat("  可匹配下调具体通路数 =", length(down_final_names), "\n")
+
+# 5. 获取MSigDB标准KEGG基因集
+msig_kegg <- msigdbr(species = "Homo sapiens", category = "C2") %>% 
+  dplyr::filter(grepl("^KEGG_", gs_name))
+kegg_gene_sets <- split(msig_kegg$gene_symbol, msig_kegg$gs_name)
+msig_standard_names <- names(kegg_gene_sets)
+cat("\n  MSigDB标准KEGG具体通路总数 =", length(msig_standard_names), "\n")
+
+# 6. 精准匹配有效基因集
+up_gene_sets <- kegg_gene_sets[names(kegg_gene_sets) %in% up_final_names]
+down_gene_sets <- kegg_gene_sets[names(kegg_gene_sets) %in% down_final_names]
+target_gene_sets <- c(up_gene_sets, down_gene_sets)
+
+cat("\n===== 最终精准匹配结果 =====\n")
+cat("  成功匹配上调具体通路数 =", length(up_gene_sets), "\n")
+cat("  成功匹配下调具体通路数 =", length(down_gene_sets), "\n")
+cat("  进入GSEA的有效具体通路总数 =", length(target_gene_sets), "\n")
+
+# 7. 运行GSEA分析
+gsea_res <- fgsea(
+  pathways = target_gene_sets,
+  stats = rank_vector,
+  minSize = 1,
+  maxSize = 2000,
+  scoreType = "pos"
+)
+
+# 8. 处理数据+保存CSV
+gsea_res <- as.data.frame(gsea_res)
+gsea_res$direction <- ifelse(gsea_res$pathway %in% names(up_gene_sets), "Up", "Down")
+gsea_res_save <- gsea_res %>%
+  dplyr::mutate(
+    coreEnrichment = sapply(leadingEdge, function(x) paste(x, collapse = ","))
+  ) %>%
+  dplyr::select(-leadingEdge)
+write.csv(gsea_res_save, file.path(output_path, "04_CD8T_GSEA", "GSEA_KEGG_SingleCell_Final_Result.csv"), row.names = FALSE)
+cat("      GSEA结果已成功保存为CSV！\n")
+
+# 9. 绘制GSEA富集曲线图（单通路单PDF文件）
+dir.create(file.path(output_path, "04_CD8T_GSEA", "GSEA_Plots_CD8T"), showWarnings = FALSE)
+cat("\n===== 绘制GSEA富集图（单通路单PDF） =====\n")
+
+# 9.1 上调通路富集图【单通路单PDF】
+up_gsea <- gsea_res[gsea_res$direction == "Up", ]
+if (nrow(up_gsea) > 0) {
+  for (i in 1:nrow(up_gsea)) {
+    # 定义每个通路的独立PDF文件名（去KEGG_前缀，标注Up+CD8T）
+    pathway_name <- gsub("KEGG_", "", up_gsea$pathway[i])
+    pdf_file <- file.path(output_path, "04_CD8T_GSEA", "GSEA_Plots_CD8T", paste0("CD8T_", pathway_name, "_Up_Enrichment.pdf"))
+    # 每个通路单独生成PDF
+    pdf(pdf_file, width = 10, height = 6)
+    p <- plotEnrichment(
+      pathway = target_gene_sets[[up_gsea$pathway[i]]],
+      stats = rank_vector
+    ) + labs(
+      title = paste0("CD8+T细胞 - ", pathway_name),
+      subtitle = paste0("NES=", round(up_gsea$NES[i], 2), " | pval=", round(up_gsea$pval[i], 4), " | 富集基因数=", up_gsea$size[i])
+    ) + theme_bw() + theme(plot.title = element_text(hjust = 0.5, size = 12, face = "bold"))
+    print(p)
+    dev.off() # 关闭当前PDF，确保单通路单文件
+  }
+  cat("  上调通路GSEA富集图（单通路单PDF）已全部保存！\n")
+} else {
+  # 无上调通路时生成空白PDF
+  pdf(file.path(output_path, "04_CD8T_GSEA", "GSEA_Plots_CD8T", "CD8T_NO_Up_Pathway_Enrichment.pdf"), width = 10, height = 6)
+  plot(1,1,type="n",xlab="",ylab="",main="CD8+ T Cell No Up-regulated Pathway Enrichment Signal")
+  dev.off()
+  cat("  ️  无上调通路富集信号，生成空白PDF：CD8T_NO_Up_Pathway_Enrichment.pdf \n")
+}
+
+# 9.2 下调通路富集图【单通路单PDF】
+down_gsea <- gsea_res[gsea_res$direction == "Down", ]
+if (nrow(down_gsea) > 0) {
+  for (i in 1:nrow(down_gsea)) {
+    # 定义每个通路的独立PDF文件名（去KEGG_前缀，标注Down+CD8T）
+    pathway_name <- gsub("KEGG_", "", down_gsea$pathway[i])
+    pdf_file <- file.path(output_path, "04_CD8T_GSEA", "GSEA_Plots_CD8T", paste0("CD8T_", pathway_name, "_Down_Enrichment.pdf"))
+    # 每个通路单独生成PDF
+    pdf(pdf_file, width = 10, height = 6)
+    p <- plotEnrichment(
+      pathway = target_gene_sets[[down_gsea$pathway[i]]],
+      stats = rank_vector
+    ) + labs(
+      title = paste0("CD8+T细胞 - ", pathway_name),
+      subtitle = paste0("NES=", round(down_gsea$NES[i], 2), " | pval=", round(down_gsea$pval[i], 8), " | 富集基因数=", down_gsea$size[i])
+    ) + theme_bw() + theme(plot.title = element_text(hjust = 0.5, size = 12, face = "bold"))
+    print(p)
+    dev.off() # 关闭当前PDF，确保单通路单文件
+  }
+  cat("  下调通路GSEA富集图（单通路单PDF）已全部保存！\n")
+} else {
+  # 无下调通路时生成空白PDF
+  pdf(file.path(output_path, "04_CD8T_GSEA", "GSEA_Plots_CD8T", "CD8T_NO_Down_Pathway_Enrichment.pdf"), width = 10, height = 6)
+  plot(1,1,type="n",xlab="",ylab="",main="CD8+ T Cell No Down-regulated Pathway Enrichment Signal")
+  dev.off()
+  cat(" ️  无下调通路富集信号，生成空白PDF：CD8T_NO_Down_Pathway_Enrichment.pdf \n")
+}
+
+# 最终全流程完美收官汇总
+cat("\n=====    CD8+T细胞 GSEA分析全流程完成！   =====\n")
+cat("  单细胞差异基因总数：", length(rank_vector), "\n")
+cat("  成功匹配KEGG具体通路：", length(target_gene_sets), "（上调", length(up_gene_sets), "+下调", length(down_gene_sets), "）\n")
+cat("  GSEA有效富集结果数：", nrow(gsea_res), "\n")
+cat("  所有结果统一保存至：", output_path, "\n")
+cat("  核心数据：GSEA_KEGG_SingleCell_Final_Result.csv（Excel可直接打开）\n")
+cat("  分析图表：", output_path, "/GSEA_Plots_CD8T/ （每个通路1个独立PDF）\n")
+cat("  文件名规则：CD8T_通路名_Up/Down_Enrichment.pdf \n")
+
+# ====================== 步骤10：补充B细胞差异基因分析（GSEA前置依赖） ======================
+cat("\n=== 步骤10：B细胞DHX9高低组差异基因分析（GSEA前置） ===\n")
+library(future)
+options(future.globals.maxSize = 2 * 1024^3)
+# 1. 提取纯B细胞并关联DHX9分组
+b_cell_seu <- subset(all_seu_harmony, subset = cell_type == "B细胞")
+# 构建GSM-ID-DHX9分组映射
+dhx9_group_map <- analysis_df[, c("GSM_ID", "DHX9_group")]
+dhx9_group_map <- dhx9_group_map[!duplicated(dhx9_group_map$GSM_ID), ]
+# 关联分组到B细胞meta数据
+b_cell_meta <- b_cell_seu@meta.data
+b_cell_meta$cell_barcode <- rownames(b_cell_meta)
+b_cell_meta_merged <- merge(b_cell_meta, dhx9_group_map, by = "GSM_ID", all.x = TRUE)
+rownames(b_cell_meta_merged) <- b_cell_meta_merged$cell_barcode
+b_cell_meta_merged$cell_barcode <- NULL
+b_cell_seu@meta.data <- b_cell_meta_merged
+# 过滤无分组的细胞
+b_cell_seu_filtered <- b_cell_seu[, !is.na(b_cell_seu$DHX9_group)]
+b_cell_seu_filtered$DHX9_group <- factor(b_cell_seu_filtered$DHX9_group, levels = c("Low", "High"))
+cat("    纯B细胞数：", ncol(b_cell_seu), " | 过滤后有效细胞数：", ncol(b_cell_seu_filtered), "\n")
+
+# 2. B细胞差异基因分析（与CD8+T参数一致）
+if (!"normalized.data" %in% names(b_cell_seu_filtered@assays$RNA)) {
+  b_cell_seu_filtered <- NormalizeData(b_cell_seu_filtered, normalization.method = "LogNormalize", scale.factor = 10000, verbose = FALSE)
+}
+b_cell_deg <- FindMarkers(
+  object = b_cell_seu_filtered,
+  ident.1 = "Low", ident.2 = "High",
+  group.by = "DHX9_group",
+  logfc.threshold = 0.25, min.pct = 0.1,
+  adjust.method = "fdr", test.use = "wilcox",
+  verbose = FALSE
+)
+# 整理差异基因结果
+b_cell_deg$gene <- rownames(b_cell_deg)
+b_cell_deg_sig <- b_cell_deg %>% filter(p_val_adj < 0.05 & abs(avg_log2FC) > 0.25) %>% arrange(p_val_adj)
+b_up_genes <- b_cell_deg_sig %>% filter(avg_log2FC > 0) %>% pull(gene)
+b_down_genes <- b_cell_deg_sig %>% filter(avg_log2FC < 0) %>% pull(gene)
+# 保存差异基因结果
+write.csv(b_cell_deg, file.path(output_path, "05_Bcell_DEG", "Bcell_DHX9_All_DEG.csv"), row.names = FALSE)
+write.csv(b_cell_deg_sig, file.path(output_path, "05_Bcell_DEG", "Bcell_DHX9_Sig_DEG.csv"), row.names = FALSE)
+cat("    B细胞差异基因分析完成\n")
+cat("  显著差异基因数：", nrow(b_cell_deg_sig), "\n")
+cat("  上调基因数：", length(b_up_genes), " | 下调基因数：", length(b_down_genes), "\n")
+# ====================== 步骤10.5：B细胞DHX9高低组差异基因火山图绘制 ======================
+cat("\n=== 步骤10.5：绘制B细胞DHX9 Low vs High 差异基因火山图 ===\n")
+library(ggplot2)
+library(dplyr)
+library(ggrepel) # 用于标注基因名，若未安装会自动提示
+
+# 检查并安装ggrepel（火山图标注基因名必备）
+if (!require(ggrepel)) {
+  install.packages("ggrepel", repos = "https://mirrors.tuna.tsinghua.edu.cn/CRAN/")
+  library(ggrepel)
+}
+
+# 1. 准备火山图数据（处理p值为0的情况，避免log10(0)报错）
+volcano_data <- b_cell_deg %>%
+  mutate(
+    # 替换p_val_adj=0为极小值（1e-100）
+    p_val_adj = ifelse(p_val_adj == 0, 1e-100, p_val_adj),
+    # 计算-log10(校正后p值)
+    neg_log10_padj = -log10(p_val_adj),
+    # 定义显著性分组：上调（Low>High）、下调（Low<High）、不显著
+    group = case_when(
+      avg_log2FC > 0.25 & p_val_adj < 0.05 ~ "上调 (Low > High)",
+      avg_log2FC < -0.25 & p_val_adj < 0.05 ~ "下调 (Low < High)",
+      TRUE ~ "不显著"
+    ),
+    # 标记需要标注的基因（可选：前10个上调+前10个下调，或自定义关键基因）
+    label = ifelse(
+      (avg_log2FC > 0.5 & p_val_adj < 0.01) | (avg_log2FC < -0.5 & p_val_adj < 0.01),
+      gene,
+      ""
+    )
+  )
+
+# 2. 统计各组基因数量
+group_stats <- table(volcano_data$group)
+cat("  火山图分组统计：\n")
+print(group_stats)
+
+# 3. 绘制火山图
+volcano_plot <- ggplot(volcano_data, aes(x = avg_log2FC, y = neg_log10_padj, color = group)) +
+  # 绘制散点（调整大小和透明度避免重叠）
+  geom_point(size = 1.2, alpha = 0.7) +
+  # 标注关键基因名（避免重叠）
+  geom_text_repel(
+    aes(label = label),
+    size = 3,
+    color = "black",
+    max.overlaps = 20, # 最大标注数量，避免图表拥挤
+    box.padding = 0.5,
+    segment.color = "gray50"
+  ) +
+  # 设置颜色（上调红色，下调蓝色，不显著灰色）
+  scale_color_manual(values = c(
+    "上调 (Low > High)" = "#E63946",
+    "下调 (Low < High)" = "#2E86AB",
+    "不显著" = "#9E9E9E"
+  )) +
+  # 添加显著性阈值线
+  geom_vline(xintercept = c(-0.25, 0.25), linetype = "dashed", color = "gray30", linewidth = 0.5) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "gray30", linewidth = 0.5) +
+  # 设置坐标轴和标题
+  labs(
+    x = "log2(Fold Change) (Low vs High)",
+    y = "-log10(Adjusted P-value)",
+    title = "B细胞 DHX9低表达组 vs 高表达组 差异基因火山图",
+    color = "差异基因分组"
+  ) +
+  # 学术主题美化
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10),
+    legend.title = element_text(size = 11, face = "bold"),
+    legend.position = "right",
+    panel.grid = element_blank() # 去除网格线
+  )
+
+# 4. 保存火山图（PDF+PNG双格式，满足不同使用场景）
+ggsave(
+  file.path(output_path, "05_Bcell_DEG", "Bcell_DHX9_Low_vs_High_Volcano.pdf"),
+  volcano_plot,
+  width = 10,
+  height = 8,
+  dpi = 300
+)
+ggsave(
+  file.path(output_path, "05_Bcell_DEG", "Bcell_DHX9_Low_vs_High_Volcano.png"),
+  volcano_plot,
+  width = 10,
+  height = 8,
+  dpi = 300
+)
+
+
+cat("  火山图已保存至：\n")
+cat("    PDF格式：", file.path(output_path, "Bcell_DHX9_Low_vs_High_Volcano.pdf"), "\n")
+cat("    PNG格式：", file.path(output_path, "Bcell_DHX9_Low_vs_High_Volcano.png"), "\n")
+# ====================== 步骤10.6：B细胞DHX9 Low vs High KEGG富集分析 ======================
+cat("\n=== 步骤10.6：B细胞DHX9 Low vs High KEGG富集分析 ===\n")
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(ggplot2)
+library(enrichplot)
+
+# 1. 准备Low vs High的差异基因（B细胞本身就是Low vs High，无需取反）
+b_cell_deg_low_vs_high <- b_cell_deg %>%
+  filter(p_val_adj < 0.05 & abs(avg_log2FC) > 0.25)  # 显著差异基因（Low vs High）
+
+# 2. 基因ID转换（SYMBOL→ENTREZID）
+b_sig_genes <- b_cell_deg_low_vs_high$gene
+b_entrez <- bitr(
+  b_sig_genes,
+  fromType = "SYMBOL",
+  toType = "ENTREZID",
+  OrgDb = org.Hs.eg.db,
+  drop = TRUE
+)
+
+# 3. KEGG通路富集分析（人类hsa）
+b_kegg_low_high <- enrichKEGG(
+  gene = b_entrez$ENTREZID,
+  organism = "hsa",
+  pvalueCutoff = 0.1,
+  pAdjustMethod = "fdr",
+  qvalueCutoff = 0.2
+)
+
+# 4. 处理富集结果（标注Low vs High上下调）
+if (nrow(b_kegg_low_high) > 0) {
+  # 提取B细胞Low vs High的上下调基因
+  b_up_genes_low <- b_cell_deg_low_vs_high %>% filter(avg_log2FC > 0) %>% pull(gene)  # Low上调
+  b_down_genes_low <- b_cell_deg_low_vs_high %>% filter(avg_log2FC < 0) %>% pull(gene) # Low下调
+  
+  # 为KEGG通路标注方向
+  b_kegg_result <- as.data.frame(b_kegg_low_high) %>%
+    mutate(
+      pathway_genes = sapply(strsplit(geneID, "/"), function(x) {
+        mapIds(org.Hs.eg.db, x, "SYMBOL", "ENTREZID", multiVals = "first")
+      }),
+      up_overlap = sapply(pathway_genes, function(x) length(intersect(x, b_up_genes_low))),
+      down_overlap = sapply(pathway_genes, function(x) length(intersect(x, b_down_genes_low))),
+      direction = ifelse(up_overlap > down_overlap, "Up (Low > High)", "Down (Low < High)")
+    ) %>%
+    dplyr::select(-pathway_genes)
+  
+  # 5. 绘制KEGG富集气泡图（学术级）
+  b_kegg_dotplot <- dotplot(
+    b_kegg_low_high,
+    showCategory = 15,
+    color = "p.adjust",
+    size = "Count",
+    title = "B细胞 DHX9 Low vs High KEGG通路富集气泡图"
+  ) +
+    scale_color_gradient(low = "#2E86AB", high = "#E63946") +
+    labs(
+      x = "Rich Factor",
+      y = "KEGG Pathway",
+      color = "Adjusted P-value",
+      size = "Gene Count"
+    ) +
+    theme_bw() +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+      axis.text.y = element_text(size = 8)
+    )
+  
+  # 6. 绘制KEGG富集柱状图
+  b_kegg_barplot <- barplot(
+    b_kegg_low_high,
+    showCategory = 15,
+    color = "p.adjust",
+    title = "B细胞 DHX9 Low vs High KEGG通路富集柱状图"
+  ) +
+    scale_color_gradient(low = "#2E86AB", high = "#E63946") +
+    theme_bw() +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+      axis.text.y = element_text(size = 8)
+    )
+  
+  # 7. 保存图表和结果
+  ggsave(
+    file.path(output_path, "06_Bcell_KEGG", "Bcell_DHX9_Low_vs_High_KEGG_Dotplot.pdf"),
+    b_kegg_dotplot,
+    width = 10,
+    height = 8,
+    dpi = 300
+  )
+  ggsave(
+    file.path(output_path, "06_Bcell_KEGG", "Bcell_DHX9_Low_vs_High_KEGG_Barplot.pdf"),
+    b_kegg_barplot,
+    width = 10,
+    height = 8,
+    dpi = 300
+  )
+  write.csv(
+    b_kegg_result,
+    file.path(output_path, "06_Bcell_KEGG", "Bcell_DHX9_Low_vs_High_KEGG_Result.csv"),
+    row.names = FALSE
+  )
+  
+  cat("  B细胞Low vs High KEGG富集分析完成！\n")
+  cat("    气泡图保存：", file.path(output_path, "06_Bcell_KEGG", "Bcell_DHX9_Low_vs_High_KEGG_Dotplot.pdf"), "\n")
+  cat("    柱状图保存：", file.path(output_path, "06_Bcell_KEGG", "Bcell_DHX9_Low_vs_High_KEGG_Barplot.pdf"), "\n")
+  cat("    结果表格保存：", file.path(output_path, "06_Bcell_KEGG", "Bcell_DHX9_Low_vs_High_KEGG_Result.csv"), "\n")
+} else {
+  cat("   B细胞Low vs High无显著KEGG富集通路（放宽阈值后仍无）\n")
+  pdf(file.path(output_path, "06_Bcell_KEGG", "Bcell_DHX9_Low_vs_High_KEGG_Empty.pdf"), width = 10, height = 8)
+  plot(1,1,type="n",xlab="",ylab="",main="B Cell Low vs High No KEGG Enrichment Signal")
+  dev.off()
+}
+
+
+
+# ====================== 步骤11：B细胞 KEGG GSEA 分析 ======================
+cat("\n=== 步骤11：B细胞 KEGG 具体通路 GSEA 分析 ===\n")
+# 加载必备包
+library(fgsea)
+library(msigdbr)
+library(dplyr)
+library(ggplot2)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(enrichplot)
+
+# 1. 构建B细胞GSEA基因排名向量
+b_rank_vector <- b_cell_deg$avg_log2FC
+names(b_rank_vector) <- b_cell_deg$gene
+b_rank_vector <- sort(b_rank_vector, decreasing = TRUE)
+cat("    已构建B细胞GSEA基因排名向量（", length(b_rank_vector), "个基因）\n")
+
+# 2. 基于B细胞显著差异基因获取候选通路（解决匹配为0）
+# 2.1 差异基因ID转换
+b_sig_gene_entrez <- bitr(b_cell_deg_sig$gene, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+# 2.2 KEGG富集（放宽阈值保证有通路）
+b_kegg_enrich <- enrichKEGG(
+  gene = b_sig_gene_entrez$ENTREZID,
+  organism = "hsa",
+  pvalueCutoff = 0.2,
+  pAdjustMethod = "fdr",
+  qvalueCutoff = 0.2
+)
+cat("    基于B细胞差异基因获取KEGG显著通路数：", nrow(b_kegg_enrich), "\n")
+
+# 3. 通路名标准化（转换为MSigDB格式）
+if (nrow(b_kegg_enrich) > 0) {
+  b_kegg_pathway_names <- b_kegg_enrich$Description
+  b_kegg_pathway_names_msig <- gsub("[ /-]", "_", b_kegg_pathway_names) %>% 
+    toupper() %>% 
+    paste0("KEGG_", .)
+} else {
+  # 无富集时用MSigDB全KEGG通路兜底
+  msig_kegg <- msigdbr(species = "Homo sapiens", category = "C2") %>% dplyr::filter(grepl("^KEGG_", gs_name))
+  b_kegg_pathway_names_msig <- unique(msig_kegg$gs_name)
+  cat("   ️  无显著富集通路，使用MSigDB全KEGG通路（", length(b_kegg_pathway_names_msig), "个）\n")
+}
+
+# 4. 获取MSigDB标准KEGG基因集并匹配
+msig_kegg <- msigdbr(species = "Homo sapiens", category = "C2") %>% 
+  dplyr::filter(grepl("^KEGG_", gs_name))
+kegg_gene_sets <- split(msig_kegg$gene_symbol, msig_kegg$gs_name)
+b_target_gene_sets <- kegg_gene_sets[names(kegg_gene_sets) %in% b_kegg_pathway_names_msig]
+
+# 5. 标注通路上调/下调方向
+b_pathway_dir <- sapply(names(b_target_gene_sets), function(pw) {
+  pw_genes <- b_target_gene_sets[[pw]]
+  up_overlap <- length(intersect(pw_genes, b_up_genes))
+  down_overlap <- length(intersect(pw_genes, b_down_genes))
+  if (up_overlap > down_overlap) "Up" else "Down"
+})
+b_up_gene_sets <- b_target_gene_sets[names(b_pathway_dir)[b_pathway_dir == "Up"]]
+b_down_gene_sets <- b_target_gene_sets[names(b_pathway_dir)[b_pathway_dir == "Down"]]
+
+cat("\n===== B细胞最终精准匹配结果 =====\n")
+cat("  B细胞成功匹配上调具体通路数 =", length(b_up_gene_sets), "\n")
+cat("  B细胞成功匹配下调具体通路数 =", length(b_down_gene_sets), "\n")
+cat("  B细胞进入GSEA的有效具体通路总数 =", length(b_target_gene_sets), "\n")
+
+# 6. 运行B细胞GSEA分析
+set.seed(2024)
+b_gsea_res <- fgsea(
+  pathways = b_target_gene_sets,
+  stats = b_rank_vector,
+  minSize = 1,
+  maxSize = 2000,
+  scoreType = "std",
+  nperm = 100
+)
+
+# 7. 处理并保存B细胞GSEA结果
+b_gsea_res <- as.data.frame(b_gsea_res)
+b_gsea_res$direction <- ifelse(b_gsea_res$pathway %in% names(b_up_gene_sets), "Up", "Down")
+b_gsea_res_save <- b_gsea_res %>%
+  dplyr::mutate(
+    coreEnrichment = sapply(leadingEdge, function(x) paste(x, collapse = ","))
+  ) %>%
+  dplyr::select(-leadingEdge)
+write.csv(b_gsea_res_save, file.path(output_path, "07_Bcell_GSEA", "GSEA_KEGG_Bcell_Final_Result.csv"), row.names = FALSE)
+cat("      B细胞GSEA结果已成功保存为CSV！\n")
+
+# 8. 绘制B细胞GSEA富集图（单通路单PDF，独立目录）
+b_plot_dir <- file.path(output_path, "07_Bcell_GSEA", "GSEA_Plots_Bcell")
+dir.create(b_plot_dir, showWarnings = FALSE, recursive = TRUE)
+cat("\n===== 绘制B细胞GSEA富集图（单通路单PDF） =====\n")
+
+# 8.1 B细胞上调通路富集图
+b_up_gsea <- b_gsea_res[b_gsea_res$direction == "Up", ]
+if (nrow(b_up_gsea) > 0) {
+  for (i in 1:nrow(b_up_gsea)) {
+    pathway_name <- gsub("KEGG_", "", b_up_gsea$pathway[i])
+    pdf_file <- file.path(b_plot_dir, paste0("Bcell_", pathway_name, "_Up_Enrichment.pdf"))
+    pdf(pdf_file, width = 10, height = 6)
+    p <- plotEnrichment(
+      pathway = b_target_gene_sets[[b_up_gsea$pathway[i]]],
+      stats = b_rank_vector
+    ) + labs(
+      title = paste0("B细胞 - ", pathway_name),
+      subtitle = paste0("NES=", round(b_up_gsea$NES[i], 2), " | pval=", round(b_up_gsea$pval[i], 8), " | 富集基因数=", b_up_gsea$size[i])
+    ) + theme_bw() + theme(plot.title = element_text(hjust = 0.5, size = 12, face = "bold"))
+    print(p)
+    dev.off()
+  }
+  cat("  B细胞上调通路GSEA富集图（", nrow(b_up_gsea), "个）已保存！\n")
+} else {
+  pdf(file.path(b_plot_dir, "Bcell_NO_Up_Pathway_Enrichment.pdf"), width = 10, height = 6)
+  plot(1,1,type="n",xlab="",ylab="",main="B Cell No Up-regulated Pathway Enrichment Signal")
+  dev.off()
+  cat(" ️  B细胞无上调通路富集信号，生成空白PDF\n")
+}
+
+# 8.2 B细胞下调通路富集图
+b_down_gsea <- b_gsea_res[b_gsea_res$direction == "Down", ]
+if (nrow(b_down_gsea) > 0) {
+  for (i in 1:nrow(b_down_gsea)) {
+    pathway_name <- gsub("KEGG_", "", b_down_gsea$pathway[i])
+    pdf_file <- file.path(b_plot_dir, paste0("Bcell_", pathway_name, "_Down_Enrichment.pdf"))
+    pdf(pdf_file, width = 10, height = 6)
+    p <- plotEnrichment(
+      pathway = b_target_gene_sets[[b_down_gsea$pathway[i]]],
+      stats = b_rank_vector
+    ) + labs(
+      title = paste0("B细胞 - ", pathway_name),
+      subtitle = paste0("NES=", round(b_down_gsea$NES[i], 2), " | pval=", round(b_down_gsea$pval[i], 8), " | 富集基因数=", b_down_gsea$size[i])
+    ) + theme_bw() + theme(plot.title = element_text(hjust = 0.5, size = 12, face = "bold"))
+    print(p)
+    dev.off()
+  }
+  cat("  B细胞下调通路GSEA富集图（", nrow(b_down_gsea), "个）已保存！\n")
+} else {
+  pdf(file.path(b_plot_dir, "Bcell_NO_Down_Pathway_Enrichment.pdf"), width = 10, height = 6)
+  plot(1,1,type="n",xlab="",ylab="",main="B Cell No Down-regulated Pathway Enrichment Signal")
+  dev.off()
+  cat(" ️  B细胞无下调通路富集信号，生成空白PDF\n")
+}
+# ====================== 步骤12：颗粒酶基因小提琴图（嵌套箱线图版） ======================
+cat("\n=== 新增步骤：CD8+T/B细胞颗粒酶基因小提琴图分析（嵌套箱线图） ===\n")
+library(ggplot2)
+library(dplyr)
+library(ggpubr)
+library(tidyr)
+
+# 1. 定义核心颗粒酶基因列表
+# granzyme_genes <- c("ENTPD1","TIGIT","PDCD1","HAVCR2","CTLA4","GZMA","GZMB","Gzmc","IFNG","PRF1","B2M")
+granzyme_genes <- c("GZMB")
+cat("  初始待分析的颗粒酶基因：", paste(granzyme_genes, collapse = ", "), "\n")
+
+# 2. 函数：绘制嵌套箱线图的小提琴图
+plot_granzyme_violin <- function(seu_object, cell_type_name, output_dir) {
+  if (ncol(seu_object) == 0) {
+    cat("  ", cell_type_name, "无有效细胞，跳过绘图\n")
+    return(NULL)
+  }
+  
+  # 逐个测试基因，只保留能成功提取的
+  valid_genes <- c()
+  for (gene in granzyme_genes) {
+    test <- tryCatch(
+      FetchData(seu_object, vars = gene, assay = "RNA", layer = "data"),
+      error = function(e) NULL,
+      warning = function(w) NULL
+    )
+    if (!is.null(test)) {
+      valid_genes <- c(valid_genes, gene)
+    } else {
+      cat("    基因", gene, "在", cell_type_name, "中不存在，已剔除\n")
+    }
+  }
+  
+  if (length(valid_genes) == 0) {
+    cat("  ", cell_type_name, "中无任何可提取的颗粒酶基因，跳过绘图\n")
+    return(NULL)
+  }
+  cat("   最终保留的分析基因：", paste(valid_genes, collapse = ", "), "\n")
+  
+  # 提取表达数据
+  granzyme_expr <- FetchData(
+    seu_object,
+    vars = c(valid_genes, "DHX9_group"),
+    assay = "RNA",
+    layer = "data"
+  ) %>%
+    filter(!is.na(DHX9_group)) %>%
+    pivot_longer(
+      cols = all_of(valid_genes),
+      names_to = "Gene",
+      values_to = "Expression"
+    )
+  
+  # 逐个绘制嵌套小提琴图
+  for (gene in valid_genes) {
+    gene_data <- granzyme_expr %>% filter(Gene == gene)
+    
+    # 统计检验
+    stat_test <- compare_means(Expression ~ DHX9_group, data = gene_data, method = "wilcox.test")
+    p_val <- round(stat_test$p, 4)
+    p_label <- ifelse(p_val < 0.001, "p < 0.001", paste0("p = ", p_val))
+    
+    # 绘图：外层小提琴 + 内层箱线图
+    p <- ggplot(gene_data, aes(x = DHX9_group, y = Expression, fill = DHX9_group)) +
+      # 1. 外层：小提琴图（核密度）
+      geom_violin(scale = "width", alpha = 0.7) +
+      # 2. 内层：箱线图（嵌套在小提琴内）
+      # geom_boxplot(
+      #   width = 0.1,        # 缩窄箱线图，嵌套在小提琴中
+      #   fill = "white",     # 箱线图填充为白色，突出小提琴颜色
+      #   alpha = 0.7,        # 半透明，避免遮挡
+      #   outlier.shape = NA  # 隐藏箱线图自带的异常值点（已用jitter展示）
+      # ) +
+      geom_boxplot(
+        width = 0.2,
+        fill = "white",
+        alpha = 0.7,
+        outlier.shape = NA,
+        median.color = "black",  # 明确设置中位数线颜色为黑色
+        median.size = 1.5,       # 加粗中位数线，让它更醒目
+        color = "black"          # 箱子边框颜色也设为黑色，保持一致
+      ) +
+      # 3. 散点：展示每个细胞的表达值
+      geom_jitter(size = 0.8, alpha = 0.5, position = position_jitter(0.2)) +
+      # 颜色与标注
+      scale_fill_manual(values = c("Low" = "#2E86AB", "High" = "#E63946")) +
+      stat_compare_means(method = "wilcox.test", label = "p.format", label.y = max(gene_data$Expression) * 1.1) +
+      labs(
+        title = paste0(cell_type_name, " - ", gene, " 表达（DHX9高低组）"),
+        x = "DHX9表达分组",
+        y = paste0(gene, " 表达量（LogNormalize）"),
+        fill = "DHX9分组"
+      ) +
+      theme_bw() +
+      theme(
+        plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+        axis.title = element_text(size = 11),
+        axis.text = element_text(size = 10),
+        legend.position = "none"
+      )
+    
+    # 保存图片
+    pdf_path <- file.path(output_dir, paste0(cell_type_name, "_", gene, "_Violin_Box.pdf"))
+    png_path <- file.path(output_dir, paste0(cell_type_name, "_", gene, "_Violin_Box.png"))
+    ggsave(pdf_path, p, width = 7, height = 6, dpi = 300)
+    ggsave(png_path, p, width = 7, height = 6, dpi = 300)
+    
+    cat("    ", gene, "嵌套小提琴图已保存：", pdf_path, "\n")
+  }
+}
+
+# 3. 绘制CD8+T细胞小提琴图
+cat("  绘制CD8+T细胞颗粒酶小提琴图（嵌套箱线图）...\n")
+plot_granzyme_violin(
+  seu_object = cd8t_seu_filtered,
+  cell_type_name = "CD8T_Cell",
+  output_dir = file.path(output_path, "08_Granzyme_Violin")
+)
+
+cat("  嵌套小提琴图绘制完成！\n")
+
+
+
+# ====================== 步骤13：核心基因差异分析（DHX9 Low/High组）并保存CSV ======================
+cat("\n=== 步骤13：CD8+T细胞核心基因DHX9分组差异分析 ===\n")
+
+library(dplyr)
+library(tidyr)
+library(stats)
+
+# 1. 定义目标基因列表（复用颗粒酶基因列表）
+# granzyme_genes <- c("ENTPD1","TIGIT","PDCD1","HAVCR2","CTLA4","GZMA","GZMB","Gzmc","IFNG","PRF1","B2M")
+granzyme_genes <- c("GZMB")
+cat("  待分析的差异基因列表：", paste(granzyme_genes, collapse = ", "), "\n")
+
+# 2. 检查Seurat对象有效性（复用步骤7过滤后的CD8+T细胞对象）
+if (ncol(cd8t_seu_filtered) == 0) {
+  cat("   CD8+T细胞对象无有效细胞，终止差异分析\n")
+  stop("无有效细胞，退出步骤13")
+}
+
+# 3. 验证基因在数据中的存在性（忽略大小写，避免基因名匹配失败）
+all_genes_in_seu <- rownames(cd8t_seu_filtered@assays$RNA@data)
+valid_genes <- c()
+for (gene in granzyme_genes) {
+  # 不区分大小写匹配基因名
+  matched_gene <- all_genes_in_seu[tolower(all_genes_in_seu) == tolower(gene)]
+  if (length(matched_gene) > 0) {
+    valid_genes <- c(valid_genes, matched_gene[1])  # 取第一个匹配的基因名
+  } else {
+    cat("    基因", gene, "在CD8+T细胞数据中无匹配结果，已剔除\n")
+  }
+}
+
+# 4. 检查有效基因数量
+if (length(valid_genes) == 0) {
+  cat("   无有效基因，终止差异分析\n")
+  stop("无有效基因，退出步骤13")
+}
+cat("   有效分析基因：", paste(valid_genes, collapse = ", "), "\n")
+
+# 5. 提取基因表达值 + DHX9分组信息（与小提琴图用相同的LogNormalize值）
+expr_data <- FetchData(
+  cd8t_seu_filtered,
+  vars = c(valid_genes, "DHX9_group"),
+  assay = "RNA",
+  layer = "data"  # 确保和小提琴图的表达值一致
+) %>% filter(!is.na(DHX9_group))  # 过滤无分组的细胞
+
+# 6. 初始化差异结果数据框
+diff_results <- data.frame(
+  基因名 = character(),
+  Low组均值 = numeric(),
+  Low组中位数 = numeric(),
+  High组均值 = numeric(),
+  High组中位数 = numeric(),
+  Log2FC = numeric(),  # High/Low 均值比的log2
+  p值 = numeric(),
+  FDR校正p值 = numeric(),  
+  stringsAsFactors = FALSE
+)
+
+# 7. 逐个基因做差异分析
+for (gene in valid_genes) {
+  # 按分组提取表达值
+  low_expr <- expr_data %>% filter(DHX9_group == "Low") %>% pull(!!gene)
+  high_expr <- expr_data %>% filter(DHX9_group == "High") %>% pull(!!gene)
+  
+  # 计算描述性统计（保留4位小数，便于查看）
+  low_mean <- round(mean(low_expr), 4)
+  low_median <- round(median(low_expr), 4)
+  high_mean <- round(mean(high_expr), 4)
+  high_median <- round(median(high_expr), 4)
+  
+  # 计算Log2FC（High/Low，加1e-6避免log2(0)报错）
+  log2fc <- round(log2((high_mean + 1e-6) / (low_mean + 1e-6)), 4)
+  
+  # Wilcoxon秩和检验（与小提琴图的统计方法一致）
+  wilcox_test <- wilcox.test(high_expr, low_expr)
+  p_val <- wilcox_test$p.value
+  
+  # 存入结果数据框
+  diff_results <- rbind(diff_results, data.frame(
+    基因名 = gene,
+    Low组均值 = low_mean,
+    Low组中位数 = low_median,
+    High组均值 = high_mean,
+    High组中位数 = high_median,
+    Log2FC = log2fc,
+    p值 = p_val,
+    FDR校正p值 = NA,  # 先占位，后续统一校正
+    stringsAsFactors = FALSE
+  ))
+}
+
+# 8. FDR多重检验校正
+diff_results$FDR校正p值 <- round(p.adjust(diff_results$p值, method = "fdr"), 6)
+
+# 9. 保存结果到CSV（UTF-8编码，Excel可直接打开）
+output_csv <- file.path(output_path, "08_Granzyme_Violin", "CD8T_DHX9分组核心基因差异分析结果.csv")
+write.csv(diff_results, output_csv, row.names = FALSE, fileEncoding = "UTF-8")
+
+# 10. 打印结果预览
+cat("   差异分析结果预览：\n")
+print(diff_results, row.names = FALSE)
+cat("   差异分析结果已保存至：", output_csv, "\n")
+# ====================== 最终汇总 ======================
+cat("\n=====    全流程最终汇总    =====\n")
+cat("  CD8+T细胞分析：DHX9高低组差异基因GSEA，单通路单PDF保存至 GSEA_Plots_CD8T\n")
+cat("  B细胞分析：补充差异基因分析+GSEA，单通路单PDF保存至 GSEA_Plots_Bcell\n")
+cat("  核心结果文件：\n")
+cat("├─ CD8T_DHX9_All_DEG.csv / CD8T_DHX9_Sig_DEG.csv\n")
+cat("├─ Bcell_DHX9_All_DEG.csv / Bcell_DHX9_Sig_DEG.csv\n")
+cat("├─ GSEA_KEGG_SingleCell_Final_Result.csv (CD8+T)\n")
+cat("└─ GSEA_KEGG_Bcell_Final_Result.csv (B细胞)\n")
+cat("  所有结果路径：", output_path, "\n")
+cat("  可直接对比CD8+T和B细胞在DHX9高低组的KEGG通路富集差异！\n")
+
+# ====================== 调试代码：查看Entpd1在每个CD8+T细胞的表达值 ======================
+cat("\n=== 提取Entpd1基因的每个细胞表达值 ===\n")
+
+# 1. 从CD8+T细胞对象中提取：细胞ID + DHX9分组 + Entpd1表达量（LogNormalize值）
+entpd1_cell_expr <- FetchData(
+  object = cd8t_seu_filtered,
+  vars = c("Entpd1", "DHX9_group"),  # 提取基因表达+分组
+  assay = "RNA",
+  layer = "data"  # 和你当前绘图的LogNormalize值一致
+)
+
+# 2. 添加“细胞Barcode（唯一ID）”列（从行名提取）
+entpd1_cell_expr$细胞ID <- rownames(entpd1_cell_expr)
+
+# 3. 调整列顺序（方便查看）
+entpd1_cell_expr <- entpd1_cell_expr %>%
+  dplyr::select(细胞ID, DHX9_group, Entpd1)
+
+# 4. 显示前10个细胞的结果（看格式）
+cat("前10个细胞的Entpd1表达值：\n")
+print(head(entpd1_cell_expr, 10))
+
+# 5. 保存所有细胞的表达值到CSV文件（方便后续查看/分析）
+output_file <- file.path(output_path, "08_Granzyme_Violin", "CD8T_Entpd1_每个细胞表达值.csv")
+write.csv(entpd1_cell_expr, output_file, row.names = FALSE, fileEncoding = "UTF-8")
+
+cat("\n所有细胞的Entpd1表达值已保存至：", output_file, "\n")
+

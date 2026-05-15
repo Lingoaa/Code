@@ -1,0 +1,63 @@
+library(Seurat)
+library(ggplot2)
+library(harmony)
+library(SCP)
+rds<- readRDS("5tc_seurat_harmony.rds")
+rds$cell_type<- gsub("Cd4","CD4",rds$cell_type)
+rds$cell_type<- gsub("Cd8","CD8",rds$cell_type)
+pdf("tcellCRC_umap_1_1.pdf",width=6,height=4.5,onefile=F)
+CellDimPlot(
+  srt=rds,group.by=c("cell_type"),label=T,
+  reduction="UMAP",theme_use="theme_scp",
+palette="Set3",
+label.bg="black",label_insitu=T,label.size=4.2
+)+theme_test()+theme(legend.text=element_text(size=12),legend.key.size=unit(0.6,'cm'),
+axis.text=element_text(size=11,color="black"))
+dev.off()
+
+pdf("tcellcrc_umap_2.pdf",width=5.5,height=4,onefile=F)
+CellDimPlot(
+  srt=rds,group.by=c("orig.ident"),label=F,
+  reduction="UMAP",theme_use="theme_blank",
+palette="Set3",add_density = T,
+density_filled = TRUE, density_filled_palette = "Oranges",
+label.bg="black",label_insitu=T,label.size=4.2
+)
+dev.off()
+
+pdf("tcellcrc_umap_3.pdf",width=5.5,height=4,onefile=F)
+CellDimPlot(
+  srt=rds,group.by=c("group"),label=F,
+  reduction="UMAP",theme_use="theme_blank",
+palette="Set3",add_density = T,
+density_filled = TRUE, density_filled_palette = "Oranges",
+label.bg="black",label_insitu=T,label.size=4.2
+)
+dev.off()
+rds$orig.ident<- gsub("ko","KO",rds$orig.ident)
+rds$orig.ident<- gsub("wt","WT",rds$orig.ident)
+pdf("tcellcrc_sample_celltype_percent.pdf",width=5.5,height=4)
+CellStatPlot(rds, stat.by = "cell_type", group.by = "orig.ident", palette="Set3")+theme(legend.text=element_text(size=11),legend.spacing.y = unit(9, "cm"))
+dev.off()
+pdf("tcellcrc_group_celltype_percent.pdf",width=6.5,height=4,onefile=F)
+CellStatPlot(rds, stat.by = c("cell_type", "orig.ident"), plot_type = "sankey")+theme(legend.text=element_text(size=11),legend.spacing.y = unit(9, "cm"))
+dev.off()
+
+genes_to_check = c( "Chn2","Prkch","Bcl2", 
+"Il7r","Icos","Gzmk","Gzmb", 
+                   "Ms4a4b","Tcf7", "Cd28",
+                   "Foxp3","Ctla4",
+                   "Il23r","Cd163l1","Trdc",
+                 "Nkg7","Klrd1","Gzma")
+ht<-GroupHeatmap(
+  srt=rds,
+  features=genes_to_check,
+  group.by=c("cell_type"),
+  heatmap_palette="YlOrRd",
+  show_row_names=F,row_names_side="left",
+  add_dot=TRUE,add_reticle=TRUE
+)
+pdf("tcellcrc_celltype_dot.pdf",width=6.5,height=4.5)
+print(ht$plot)
+dev.off()
+

@@ -1,0 +1,1273 @@
+# ====================== 步骤1：环境配置与数据加载（最终稳定版） ======================
+# 1.1 安装/加载必备包（无修改）
+required_packages <- c("Seurat", "Matrix", "dplyr", "data.table", "stringr", 
+                       "ggplot2", "patchwork", "harmony", "pheatmap", "ggpubr")
+new_packages <- required_packages[!(required_packages %in% installed.packages()[,"Package"])]
+if (length(new_packages) > 0) {
+  install.packages(new_packages, dependencies = TRUE, repos = "https://mirrors.tuna.tsinghua.edu.cn/CRAN/")
+}
+library(Seurat)
+library(Matrix)
+library(dplyr)
+library(tidyr)
+library(data.table)
+library(stringr)
+library(ggplot2)
+library(patchwork)
+library(harmony)
+library(pheatmap)
+library(ggpubr)
+
+# 1.2 设置核心路径（无修改）
+setwd("D:/document/code/DHX9")
+ici_nr_path <- "./data/ICI_NR"
+ici_r_path <- "./data/ICI_R"
+output_path <- "./result/04_ICI_Analysis"
+
+# 创建子目录结构
+dir.create(file.path(output_path, "01_QC"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(output_path, "02_CellType"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(output_path, "03_DEG"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(output_path, "04_Enrichment"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(output_path, "05_Bcell"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(output_path, "06_DHX9_Expression"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(output_path, "07_Immune_Correlation"), showWarnings = FALSE, recursive = TRUE)
+
+# # 1.3 定义样本分组（无修改）
+# insensitive_gsm <- c("GSM5075660", "GSM5075662", "GSM5075665", "GSM5075666", 
+#                      "GSM5075668", "GSM5075670", "GSM5075672", "GSM5075676", 
+#                      "GSM5075678", "GSM5075680", "GSM5075682", "GSM5434092", 
+#                      "GSM5434093", "GSM5434094", "GSM6253683", "GSM6253684", "GSM6253685")
+# 
+# insensitive_gsm2folder <- list(
+#   "GSM5075660" = "GSM5075660_p007t.tsv",
+#   "GSM5075662" = "GSM5075662_p008t.tsv",
+#   "GSM5075665" = "GSM5075665_p009t1.tsv",
+#   "GSM5075666" = "GSM5075666_p009t2.tsv",
+#   "GSM5075668" = "GSM5075668_p012t.tsv",
+#   "GSM5075670" = "GSM5075670_p013t.tsv",
+#   "GSM5075672" = "GSM5075672_p014t.tsv",
+#   "GSM5075676" = "GSM5075676_p017t.tsv",
+#   "GSM5075678" = "GSM5075678_p020t.tsv",
+#   "GSM5075680" = "GSM5075680_p021t.tsv",
+#   "GSM5075682" = "GSM5075682_p025t.tsv",
+#   "GSM5434092" = "GSM5434092_Patient1-1.count_mtx.tsv",
+#   "GSM5434093" = "GSM5434093_Patient1-2.count_mtx.tsv",
+#   "GSM5434094" = "GSM5434094_Patient1-3.count_mtx.tsv",
+#   "GSM6253683" = "GSM6253683_Patient2",
+#   "GSM6253684" = "GSM6253684_Patient3",
+#   "GSM6253685" = "GSM6253685_Patient4"
+# )
+# 
+# sensitive_gsm_tumor <- c(
+#   "GSM6213956", "GSM6213957", "GSM6213958", "GSM6213959", "GSM6213960", 
+#   "GSM6213961", "GSM6213962", "GSM6213963", "GSM6213964", "GSM6213965", 
+#   "GSM6213966", "GSM6213967", "GSM6213968", "GSM6213969", "GSM6213970", 
+#   "GSM6213971", "GSM6213972", "GSM6213973", "GSM6213974", "GSM6213975", 
+#   "GSM6213976", "GSM6213977", "GSM6213978", "GSM6213979", "GSM6213980",
+#   "GSM6213981", "GSM6213982", "GSM6213983", "GSM6213984", "GSM6213985",
+#   "GSM6213986", "GSM6213987", "GSM6213988", "GSM6213989", "GSM6213990",
+#   "GSM6213991", "GSM6213992", "GSM6213993", "GSM6213994", "GSM6213995"
+# )
+# sensitive_gsm_tumor <- c(
+#   "GSM6213956", "GSM6213957", "GSM6213958", "GSM6213959", "GSM6213960", 
+#   "GSM6213961", "GSM6213962", "GSM6213963", "GSM6213964", "GSM6213965", 
+#   "GSM6213966", "GSM6213967", "GSM6213968", "GSM6213969", "GSM6213970", 
+#   "GSM6213971", "GSM6213972", "GSM6213973", "GSM6213974", "GSM6213975", 
+#   "GSM6213976", "GSM6213977", "GSM6213978", "GSM6213979", "GSM6213980",
+#   "GSM6213981", "GSM6213982", "GSM6213983", "GSM6213984", "GSM6213985",
+#   "GSM6213986", "GSM6213987", "GSM6213988", "GSM6213989", "GSM6213990",
+#   "GSM6213991", "GSM6213992", "GSM6213993", "GSM6213994", "GSM6213995"
+# )
+
+
+
+
+# 1.3 定义样本分组（无修改）
+insensitive_gsm <- c("GSM5075660", "GSM5075662", "GSM5075665", "GSM5075666", 
+                     "GSM5075668", "GSM5075670", "GSM5075672", "GSM5075676", 
+                     "GSM5075678", "GSM5075680", "GSM5075682", "GSM5434092", 
+                     "GSM6253683", "GSM6253684", "GSM6253685")
+
+insensitive_gsm2folder <- list(
+  "GSM5075660" = "GSM5075660_p007t.tsv",
+  "GSM5075662" = "GSM5075662_p008t.tsv",
+  "GSM5075665" = "GSM5075665_p009t1.tsv",
+  "GSM5075666" = "GSM5075666_p009t2.tsv",
+  "GSM5075668" = "GSM5075668_p012t.tsv",
+  "GSM5075670" = "GSM5075670_p013t.tsv",
+  "GSM5075672" = "GSM5075672_p014t.tsv",
+  "GSM5075676" = "GSM5075676_p017t.tsv",
+  "GSM5075678" = "GSM5075678_p020t.tsv",
+  "GSM5075680" = "GSM5075680_p021t.tsv",
+  "GSM5075682" = "GSM5075682_p025t.tsv",
+  "GSM5434092" = "GSM5434092_Patient1-1.count_mtx.tsv",
+  "GSM6253683" = "GSM6253683_Patient2",
+  "GSM6253684" = "GSM6253684_Patient3",
+  "GSM6253685" = "GSM6253685_Patient4"
+)
+
+sensitive_gsm_tumor <- c(
+  "GSM6213956", "GSM6213957", "GSM6213958", "GSM6213959", "GSM6213960", 
+  "GSM6213961", "GSM6213962", "GSM6213963", "GSM6213964", "GSM6213965", 
+  "GSM6213966", "GSM6213967", "GSM6213968", "GSM6213969", "GSM6213970" 
+)
+# 1.4 读取敏感样本数据（无修改）
+cat("步骤1：读取敏感样本数据（内存优化版）...\n")
+sensitive_list <- list()
+filter_min_cells <- 5    
+filter_min_features <- 300  
+
+for (gsm in sensitive_gsm_tumor) {
+  cat("  读取：", gsm, "\n")
+  barcode_file <- list.files(ici_r_path, pattern = paste0(gsm, ".*barcodes.tsv.gz"), full.names = TRUE)
+  feature_file <- list.files(ici_r_path, pattern = paste0(gsm, ".*features.tsv.gz"), full.names = TRUE)
+  matrix_file <- list.files(ici_r_path, pattern = paste0(gsm, ".*matrix.mtx.gz"), full.names = TRUE)
+  
+  if (length(barcode_file) == 1 & length(feature_file) == 1 & length(matrix_file) == 1) {
+    counts_matrix <- readMM(matrix_file)
+    barcodes <- readLines(gzfile(barcode_file))
+    features <- read.delim(gzfile(feature_file), header = FALSE, stringsAsFactors = FALSE)
+    gene_names <- make.unique(features[, 2])
+    
+    rownames(counts_matrix) <- gene_names
+    colnames(counts_matrix) <- barcodes
+    
+    gene_expr_count <- rowSums(counts_matrix > 0)
+    counts_filtered <- counts_matrix[gene_expr_count >= filter_min_cells, ]
+    
+    if (nrow(counts_filtered) > 0 & ncol(counts_filtered) > 0) {
+      seu <- CreateSeuratObject(
+        counts = counts_filtered, 
+        project = "ICI_Sensitive", 
+        min.cells = filter_min_cells,
+        min.features = filter_min_features,
+        assay = "RNA"
+      )
+      seu$GSM_ID <- gsm
+      seu$ICI_Response <- "Sensitive"
+      seu$Tissue_Type <- "Tumor"
+      
+      sensitive_list[[gsm]] <- seu
+      cat("     已读取，当前列表长度：", length(sensitive_list), "\n")
+    }
+    
+    rm(counts_matrix, counts_filtered, gene_expr_count)
+    gc(verbose = FALSE, full = TRUE)
+  } else {
+    warning(paste("  ", gsm, "文件不完整，跳过"))
+  }
+}
+
+if (length(sensitive_list) == 0) {
+  stop("步骤1错误：无敏感样本数据读取成功！")
+}
+cat("  敏感样本读取完成，开始合并（细批次）...\n")
+
+# 1.5 细批次合并敏感样本
+batch_size <- 2
+batches <- split(names(sensitive_list), ceiling(seq_along(sensitive_list)/batch_size))
+batch_seu <- list()
+
+# 第一步：生成所有批次的Seurat对象（逻辑不变）
+for (i in seq_along(batches)) {
+  batch_gsm <- batches[[i]]
+  cat("    合并批次", i, "：", paste(batch_gsm, collapse = ","), "\n")
+  
+  current_batch <- sensitive_list[batch_gsm]
+  
+  if (length(current_batch) == 1) {
+    batch_seu[[i]] <- current_batch[[1]]
+  } else {
+    batch_seu[[i]] <- merge(
+      x = current_batch[[1]],
+      y = current_batch[-1],
+      add.cell.ids = batch_gsm
+    )
+  }
+  
+  current_batch <- NULL
+  gc(verbose = FALSE, full = TRUE)
+}
+
+# 第二步：增量合并所有批次
+cat("  合并所有批次为最终敏感样本对象...\n")
+# 初始化总对象为第一个批次
+sensitive_seu <- batch_seu[[1]]
+# 移除第一个批次（直接重新赋值batch_seu为剩余批次，避免NULL索引问题）
+batch_seu <- batch_seu[-1]  # 直接删除第一个元素，batch_seu现在是2-20批次（共19个）
+gc(verbose = FALSE, full = TRUE)
+
+# 遍历剩余批次（直接循环batch_seu，无需计算索引）
+if (length(batch_seu) > 0) {
+  batch_num <- 2  # 从第2批次开始计数
+  for (batch in batch_seu) {  # 直接遍历每个批次对象，不依赖索引
+    cat("    合并批次", batch_num, "到总对象...\n")
+    sensitive_seu <- merge(sensitive_seu, batch)
+    batch_num <- batch_num + 1
+    # 强制释放内存
+    gc(verbose = FALSE, full = TRUE)
+  }
+}
+
+# 最终清理敏感样本临时对象
+rm(sensitive_list, batch_seu)
+gc(verbose = FALSE, full = TRUE)
+cat("  敏感样本合并完成：细胞数 =", ncol(sensitive_seu), "\n")
+
+# 1.6 读取不敏感样本数据（无修改）
+cat("步骤1：读取不敏感样本数据（内存优化版）...\n")
+insensitive_list <- list()
+
+for (gsm in insensitive_gsm) {
+  cat("  读取：", gsm, "\n")
+  folder_name <- insensitive_gsm2folder[[gsm]]
+  folder_path <- file.path(ici_nr_path, folder_name)
+  if (!dir.exists(folder_path)) {
+    warning(paste("  ", gsm, "文件夹不存在，跳过"))
+    next
+  }
+  
+  counts <- NULL
+  # 优先读取10x格式
+  barcode_file <- list.files(folder_path, pattern = "barcodes.tsv.gz$", full.names = TRUE)
+  feature_file <- list.files(folder_path, pattern = "features.tsv.gz$", full.names = TRUE)
+  matrix_file <- list.files(folder_path, pattern = "matrix.mtx.gz$", full.names = TRUE)
+  
+  if (length(barcode_file) == 1 & length(feature_file) == 1 & length(matrix_file) == 1) {
+    tryCatch({
+      counts <- Read10X(data.dir = folder_path)
+      cat("     10x格式读取成功\n")
+    }, error = function(e) {
+      cat("     10x读取失败：", e$message, "\n")
+      counts <- NULL
+    })
+  }
+  
+  # 降级读取TSV
+  if (is.null(counts)) {
+    tsv_files <- list.files(folder_path, pattern = "*.tsv.gz$|*.tsv$", full.names = TRUE)
+    if (length(tsv_files) > 0) {
+      tryCatch({
+        counts_tsv <- fread(tsv_files[1], sep = "\t", header = TRUE, data.table = FALSE)
+        rownames(counts_tsv) <- counts_tsv[, 1]
+        counts <- Matrix(as.matrix(counts_tsv[, -1]), sparse = TRUE)
+        cat("     TSV格式读取成功（稀疏矩阵）\n")
+      }, error = function(e) {
+        cat("     TSV读取失败：", e$message, "\n")
+        counts <- NULL
+      })
+    }
+  }
+  
+  if (!is.null(counts)) {
+    rownames(counts) <- gsub("_", "-", rownames(counts))
+    # 保持原过滤逻辑
+    gene_expr_count <- rowSums(counts > 0)
+    counts_filtered <- counts[gene_expr_count >= filter_min_cells, ]
+    
+    if (nrow(counts_filtered) > 0 & ncol(counts_filtered) > 0) {
+      seu <- CreateSeuratObject(
+        counts = counts_filtered, 
+        project = "ICI_Insensitive", 
+        min.cells = filter_min_cells,
+        min.features = filter_min_features,
+        assay = "RNA"
+      )
+      seu$GSM_ID <- gsm
+      seu$ICI_Response <- "Insensitive"
+      seu$Tissue_Type <- "Tumor"
+      insensitive_list[[gsm]] <- seu
+    }
+    
+    # 用完即删+强制释放
+    rm(counts, counts_filtered, gene_expr_count)
+    gc(verbose = FALSE, full = TRUE)
+  } else {
+    warning(paste("  ", gsm, "无有效数据，跳过"))
+  }
+}
+
+if (length(insensitive_list) == 0) {
+  stop("步骤1错误：无不敏感样本数据读取成功！")
+}
+
+# 合并不敏感样本（简化逻辑，避免索引错误）
+cat("  合并不敏感样本...\n")
+if (length(insensitive_list) == 1) {
+  insensitive_seu <- insensitive_list[[1]]
+} else {
+  # 初始化总对象
+  insensitive_seu <- insensitive_list[[1]]
+  # 遍历剩余样本，逐个合并
+  for (gsm in names(insensitive_list)[-1]) {
+    cat("    合并", gsm, "到总对象...\n")
+    insensitive_seu <- merge(insensitive_seu, insensitive_list[[gsm]])
+    gc(verbose = FALSE, full = TRUE)
+  }
+}
+
+rm(insensitive_list)
+gc(verbose = FALSE, full = TRUE)
+cat("  不敏感样本合并完成：细胞数 =", ncol(insensitive_seu), "\n")
+
+# 1.7 合并所有样本
+cat("  合并所有样本（敏感+不敏感）...\n")
+all_seu_raw <- merge(
+  x = sensitive_seu, 
+  y = insensitive_seu, 
+  add.cell.ids = c("Sensitive", "Insensitive")
+)
+
+# 清理最终临时对象
+rm(sensitive_seu, insensitive_seu)
+gc(verbose = FALSE, full = TRUE)
+
+cat("步骤1完成：总细胞数 =", ncol(all_seu_raw), "，总基因数 =", nrow(all_seu_raw), "\n")
+
+# 最终检查
+if (ncol(all_seu_raw) < 1000) {
+  warning("读取的细胞数过少，建议检查文件路径和GSM编号！")
+}
+# ====================== 步骤2：单细胞数据预处理（连贯第一步） ======================
+cat("====================== 步骤2：数据预处理 ======================\n")
+
+# 2.1 质量控制（QC）：计算关键指标+过滤低质量细胞
+cat("2.1 计算QC指标...\n")
+# 计算线粒体基因比例（人类线粒体基因以MT-开头）
+all_seu_raw <- PercentageFeatureSet(all_seu_raw, pattern = "^MT-", col.name = "percent.mt")
+# 计算核糖体基因比例（人类核糖体基因以RPS/RPL开头）
+all_seu_raw <- PercentageFeatureSet(all_seu_raw, pattern = "^RP[SL]", col.name = "percent.rp")
+
+# 可视化QC指标分布（快速检查异常值）
+qc_plot <- VlnPlot(
+  all_seu_raw,
+  features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent.rp"),
+  ncol = 2,
+  pt.size = 0.1,
+  group.by = "ICI_Response"
+) + theme(plot.title = element_text(size = 10))
+# 保存QC图
+ggsave(file.path(output_path, "01_QC", "01_QC_distribution.pdf"), qc_plot, width = 12, height = 8)
+cat("    QC分布图已保存至：", file.path(output_path, "01_QC", "01_QC_distribution.pdf"), "\n")
+
+# 过滤低质量细胞（根据分布调整阈值，适配12万细胞规模）
+cat("2.1 过滤低质量细胞...\n")
+all_seu_filtered <- subset(
+  all_seu_raw,
+  subset = nFeature_RNA > 200 &        # 至少200个基因
+    nFeature_RNA < 5000 &               # 最多5000个基因（过滤异常高的细胞）
+    nCount_RNA > 500 &                  # 至少500个UMI
+    percent.mt < 10                     # 线粒体比例<10%（过滤凋亡细胞）
+)
+cat("    过滤前细胞数：", ncol(all_seu_raw), "\n")
+cat("    过滤后细胞数：", ncol(all_seu_filtered), "\n")
+
+# 2.2 归一化+缩放（Seurat标准流程）
+cat("2.2 归一化+缩放数据...\n")
+all_seu_filtered <- NormalizeData(
+  all_seu_filtered,
+  normalization.method = "LogNormalize",
+  scale.factor = 10000
+)
+
+# 识别高变基因（HVGs）：适配大数据集，减少计算量
+all_seu_filtered <- FindVariableFeatures(
+  all_seu_filtered,
+  selection.method = "vst",
+  nfeatures = 2000,  # 筛选2000个高变基因（平衡计算速度和信息）
+  verbose = FALSE
+)
+
+# 缩放数据（移除批次效应相关变量）
+all_seu_filtered <- ScaleData(
+  all_seu_filtered,
+  vars.to.regress = c("nCount_RNA", "percent.mt"),  # 校正UMI数和线粒体比例
+  verbose = FALSE
+)
+
+# 2.3 批次校正（Harmony）：校正不同样本/数据集的批次效应
+cat("2.3 Harmony批次校正...\n")
+# 先运行基础PCA
+all_seu_filtered <- RunPCA(
+  all_seu_filtered,
+  features = VariableFeatures(all_seu_filtered),
+  npcs = 50,  # 降维到50个主成分
+  verbose = FALSE
+)
+
+# 用Harmony校正批次（按GSM_ID和ICI_Response分组）
+all_seu_harmony <- RunHarmony(
+  all_seu_filtered,
+  group.by.vars = c("GSM_ID", "ICI_Response"),
+  dims = 1:50,
+  verbose = FALSE
+)
+cat("    批次校正完成！\n")
+
+# 2.4 降维+聚类（基于校正后的PCA）
+cat("2.4 降维+聚类分析...\n")
+# UMAP降维（基于Harmony校正后的成分）
+all_seu_harmony <- RunUMAP(
+  all_seu_harmony,
+  reduction = "harmony",
+  dims = 1:30,  # 取前30个主成分（平衡计算量和信息）
+  n.neighbors = 30,
+  min.dist = 0.3,
+  verbose = FALSE
+)
+
+# 聚类分析（调整resolution适配细胞数）
+all_seu_harmony <- FindNeighbors(
+  all_seu_harmony,
+  reduction = "harmony",
+  dims = 1:30,
+  verbose = FALSE
+)
+all_seu_harmony <- FindClusters(
+  all_seu_harmony,
+  resolution = 0.5,  # 分辨率0.5（12万细胞适合中等分辨率）
+  verbose = FALSE
+)
+
+# 2.5 可视化降维结果
+cat("2.5 可视化降维结果...\n")
+# UMAP按响应分组（敏感/不敏感）
+umap_response <- DimPlot(
+  all_seu_harmony,
+  reduction = "umap",
+  group.by = "ICI_Response",
+  label = FALSE,
+  pt.size = 0.1,
+  cols = c("Sensitive" = "#2E86AB", "Insensitive" = "#E63946")
+) + ggtitle("UMAP by ICI Response")
+
+# UMAP按聚类分组
+umap_cluster <- DimPlot(
+  all_seu_harmony,
+  reduction = "umap",
+  label = TRUE,
+  pt.size = 0.1,
+  repel = TRUE
+) + ggtitle("UMAP by Cluster")
+
+# 合并UMAP图并保存
+umap_plot <- umap_response + umap_cluster + plot_layout(ncol = 2)
+ggsave(file.path(output_path, "02_CellType", "02_UMAP_clustering.pdf"), umap_plot, width = 16, height = 7)
+cat("    UMAP聚类图已保存至：", file.path(output_path, "02_UMAP_clustering.pdf"), "\n")
+
+# 2.6 保存预处理后的对象（关键！后续分析直接加载）
+saveRDS(
+  all_seu_harmony,
+  file.path(output_path, "02_CellType", "seurat_object_preprocessed.rds")
+)
+cat("    预处理后的Seurat对象已保存至：", file.path(output_path, "seurat_object_preprocessed.rds"), "\n")
+
+# 2.7 输出预处理总结
+cat("\n====================== 预处理总结 ======================\n")
+cat(" 最终有效细胞数：", ncol(all_seu_harmony), "\n")
+cat(" 高变基因数：", length(VariableFeatures(all_seu_harmony)), "\n")
+cat(" 聚类数：", length(unique(Idents(all_seu_harmony))), "\n")
+cat(" 所有结果已保存至：", output_path, "\n")
+
+# ====================== 步骤3：细胞类型注释+差异分析+功能富集（终极兼容版） ======================
+cat("====================== 步骤3：细胞类型注释+差异分析 ======================\n")
+
+# 加载预处理后的Seurat对象（若重启R，先运行这行；否则跳过）
+# all_seu_harmony <- readRDS(file.path(output_path, "seurat_object_preprocessed.rds"))
+
+# 3.1 细胞类型注释（手动Marker+自动化结合，适配肿瘤微环境）
+cat("3.1 细胞类型注释...\n")
+# 3.1.1 提取每个聚类的top标记基因（用于手动注释）
+cluster_markers <- FindAllMarkers(
+  all_seu_harmony,
+  only.pos = TRUE,        # 仅保留上调基因
+  min.pct = 0.25,         # 至少25%细胞表达该基因
+  logfc.threshold = 0.25  # 至少0.25倍差异
+)
+# 保存聚类标记基因
+fwrite(cluster_markers, file.path(output_path, "03_DEG", "03_cluster_markers.csv"))
+cat("    聚类标记基因已保存至：", file.path(output_path, "03_DEG", "03_cluster_markers.csv"), "\n")
+
+# 3.1.2 定义肿瘤微环境核心Marker基因（人类，修正CD31警告）
+cell_type_markers <- list(
+  T细胞 = c("CD3D", "CD3E", "CD8A", "CD4", "FOXP3", "TBX21", "GATA3"),
+  B细胞 = c("CD19", "MS4A1", "CD79A", "CD79B"),
+  NK细胞 = c("NCAM1", "KLRD1", "GNLY", "NKG7"),
+  巨噬细胞 = c("CD68", "CSF1R", "CD14", "MRC1", "CD163"),
+  树突状细胞 = c("CD1C", "CLEC9A", "LAMP3", "CD83"),
+  中性粒细胞 = c("CSF3R", "S100A8", "S100A9"),
+  内皮细胞 = c("PECAM1", "VWF"),  # 移除CD31（蛋白名，基因名是PECAM1）
+  成纤维细胞 = c("COL1A1", "COL1A2", "FAP", "PDGFRB"),
+  肿瘤细胞 = c("EPCAM", "KRT18", "KRT19", "MKI67")
+)
+# 合并所有Marker基因，去重
+all_markers <- unique(unlist(cell_type_markers))
+
+# 3.1.3 手动绘制Marker基因点图（替代Seurat的DotPlot，无兼容问题）
+# 步骤1：提取表达数据+分组信息
+expr_data <- FetchData(all_seu_harmony, vars = c(all_markers, "seurat_clusters", "ICI_Response"))
+# 步骤2：按聚类分组，计算每个基因的表达比例和平均表达量
+expr_summary <- expr_data %>%
+  pivot_longer(cols = all_markers, names_to = "gene", values_to = "expression") %>%
+  group_by(seurat_clusters, gene) %>%
+  summarise(
+    pct_expr = sum(expression > 0) / n(),  # 表达比例
+    avg_expr = mean(expression),           # 平均表达量
+    .groups = "drop"
+  ) %>%
+  mutate(seurat_clusters = as.character(seurat_clusters))
+
+# 步骤3：ggplot2手动绘制点图（效果=Seurat的DotPlot）
+marker_plot <- ggplot(expr_summary, aes(x = gene, y = seurat_clusters)) +
+  geom_point(aes(size = pct_expr, color = avg_expr)) +  # 点大小=表达比例，颜色=平均表达量
+  scale_color_gradient(low = "lightgrey", high = "red") +
+  scale_size(range = c(0, 8)) +  # 点大小范围=DotPlot的dot.scale=8
+  theme_bw() +
+  RotatedAxis() +  # Seurat的旋转轴函数，保留
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+    plot.title = element_text(size = 12),
+    legend.position = "right"
+  ) +
+  labs(title = "Core Cell Type Markers (By Cluster)", size = "Expression Percentage", color = "Average Expression")
+ggsave(file.path(output_path, "02_CellType", "03_marker_dotplot_by_cluster.pdf"), marker_plot, width = 16, height = 10)
+
+# 补充：按ICI响应分组的Marker点图（手动绘制）
+expr_summary_response <- expr_data %>%
+  pivot_longer(cols = all_markers, names_to = "gene", values_to = "expression") %>%
+  group_by(ICI_Response, gene) %>%
+  summarise(
+    pct_expr = sum(expression > 0) / n(),
+    avg_expr = mean(expression),
+    .groups = "drop"
+  )
+marker_plot_response <- ggplot(expr_summary_response, aes(x = gene, y = ICI_Response)) +
+  geom_point(aes(size = pct_expr, color = avg_expr)) +
+  scale_color_gradient(low = "lightgrey", high = "red") +
+  scale_size(range = c(0, 8)) +
+  theme_bw() +
+  RotatedAxis() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+    plot.title = element_text(size = 12)
+  ) +
+  labs(title = "Core Cell Type Markers (Sensitive vs Insensitive)", size = "Expression Percentage", color = "Average Expression")
+ggsave(file.path(output_path, "02_CellType", "03_marker_dotplot_response.pdf"), marker_plot_response, width = 16, height = 10)
+cat("    Marker基因点图（手动绘制，无兼容问题）已保存\n")
+
+# 3.1.4 手动注释细胞类型（根据Marker基因调整）
+cell_type_annotation <- c(
+  "0" = "CD8+ T细胞", "1" = "CD4+ T细胞", "2" = "肿瘤细胞", "3" = "巨噬细胞", 
+  "4" = "CD8+ T细胞", "5" = "CD4+ T细胞", "6" = "NK细胞", "7" = "巨噬细胞", 
+  "8" = "B细胞", "9" = "CD4+ Treg", "10" = "树突状细胞", "11" = "中性粒细胞", 
+  "12" = "内皮细胞", "13" = "成纤维细胞", "14" = "CD8+ T细胞", "15" = "巨噬细胞", 
+  "16" = "CD4+ T细胞", "17" = "肿瘤细胞", "18" = "NK细胞"
+)
+# 添加细胞类型注释到Seurat对象
+all_seu_harmony$cell_type <- plyr::mapvalues(
+  x = Idents(all_seu_harmony),
+  from = names(cell_type_annotation),
+  to = as.character(cell_type_annotation)
+)
+
+# 3.1.5 可视化细胞类型分布
+cell_type_plot <- DimPlot(
+  all_seu_harmony,
+  reduction = "umap",
+  group.by = "cell_type",
+  label = TRUE,
+  repel = TRUE,
+  pt.size = 0.1
+) + ggtitle("UMAP by Cell Type")
+ggsave(file.path(output_path, "02_CellType", "03_cell_type_umap.pdf"), cell_type_plot, width = 12, height = 8)
+
+# 补充：按注释后cell_type分组的Marker点图（手动绘制）
+expr_summary_celltype <- FetchData(all_seu_harmony, vars = c(all_markers, "cell_type")) %>%
+  pivot_longer(cols = all_markers, names_to = "gene", values_to = "expression") %>%
+  group_by(cell_type, gene) %>%
+  summarise(
+    pct_expr = sum(expression > 0) / n(),
+    avg_expr = mean(expression),
+    .groups = "drop"
+  )
+marker_plot_celltype <- ggplot(expr_summary_celltype, aes(x = gene, y = cell_type)) +
+  geom_point(aes(size = pct_expr, color = avg_expr)) +
+  scale_color_gradient(low = "lightgrey", high = "red") +
+  scale_size(range = c(0, 8)) +
+  theme_bw() +
+  RotatedAxis() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+    plot.title = element_text(size = 12)
+  ) +
+  labs(title = "Core Cell Type Markers (By Annotated Cell Type)", size = "Expression Percentage", color = "Average Expression")
+ggsave(file.path(output_path, "02_CellType", "03_marker_dotplot_by_celltype.pdf"), marker_plot_celltype, width = 16, height = 10)
+cat("    细胞类型UMAP图+按cell_type分组的Marker点图已保存\n")
+
+# 3.2 差异表达分析（敏感vs不敏感组）
+cat("3.2 差异表达分析...\n")
+# 3.2.1 整体差异分析（所有细胞）
+de_all <- FindMarkers(
+  all_seu_harmony,
+  ident.1 = "Sensitive",    # 敏感组
+  ident.2 = "Insensitive",  # 不敏感组
+  group.by = "ICI_Response",
+  only.pos = FALSE,         # 保留上调+下调基因
+  min.pct = 0.1,            # 至少10%细胞表达
+  logfc.threshold = 0.25,
+  test.use = "wilcox"       # 非参数检验，适配单细胞数据
+)
+# 添加基因名列
+de_all$gene <- rownames(de_all)
+# 保存整体差异基因
+fwrite(de_all, file.path(output_path, "03_DEG", "03_de_all_cells.csv"))
+cat("    整体差异基因已保存至：", file.path(output_path, "03_DEG", "03_de_all_cells.csv"), "\n")
+
+# 3.2.2 分细胞类型差异分析（核心：聚焦T细胞/巨噬细胞/肿瘤细胞）
+key_cell_types <- c("CD8+ T细胞", "CD4+ T细胞", "巨噬细胞", "肿瘤细胞")
+de_by_celltype <- list()
+
+for (cell_type in key_cell_types) {
+  cat("    分析细胞类型：", cell_type, "\n")
+  # 子集化该细胞类型
+  seu_sub <- subset(all_seu_harmony, subset = cell_type == cell_type)
+  if (ncol(seu_sub) < 100) {  # 过滤细胞数过少的类型
+    warning(paste("    ", cell_type, "细胞数<100，跳过"))
+    next
+  }
+  # 差异分析
+  de_sub <- FindMarkers(
+    seu_sub,
+    ident.1 = "Sensitive",
+    ident.2 = "Insensitive",
+    group.by = "ICI_Response",
+    only.pos = FALSE,
+    min.pct = 0.1,
+    logfc.threshold = 0.25
+  )
+  de_sub$gene <- rownames(de_sub)
+  de_sub$cell_type <- cell_type
+  de_by_celltype[[cell_type]] <- de_sub
+  # 保存单个细胞类型差异基因
+  fwrite(de_sub, file.path(output_path, "03_DEG", paste0("03_de_", gsub("\\+| |/", "_", cell_type), ".csv")))
+}
+
+# 合并分细胞类型差异基因
+de_by_celltype_all <- bind_rows(de_by_celltype)
+fwrite(de_by_celltype_all, file.path(output_path, "03_DEG", "03_de_by_celltype.csv"))
+cat("    分细胞类型差异基因已保存至：", file.path(output_path, "03_DEG", "03_de_by_celltype.csv"), "\n")
+
+# 3.2.3 可视化Top差异基因（火山图+热图）
+# 火山图（整体差异基因）
+de_all$significance <- ifelse(
+  de_all$p_val_adj < 0.05 & abs(de_all$avg_log2FC) > 0.5,
+  ifelse(de_all$avg_log2FC > 0.5, "Up", "Down"),
+  "NS"
+)
+volcano_plot <- ggplot(de_all, aes(x = avg_log2FC, y = -log10(p_val_adj), color = significance)) +
+  geom_point(size = 0.5) +
+  scale_color_manual(values = c("Up" = "#E63946", "Down" = "#2E86AB", "NS" = "grey")) +
+  geom_vline(xintercept = c(-0.5, 0.5), linetype = "dashed", color = "black") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+  labs(x = "log2(Fold Change)", y = "-log10(Adjusted P-value)", title = "Volcano Plot (Sensitive vs Insensitive)") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))
+ggsave(file.path(output_path, "03_DEG", "03_volcano_plot.pdf"), volcano_plot, width = 8, height = 6)
+
+# 热图（Top20差异基因，分细胞类型）
+top_de_genes <- de_all %>% 
+  filter(p_val_adj < 0.05 & abs(avg_log2FC) > 0.5) %>% 
+  arrange(desc(abs(avg_log2FC))) %>% 
+  head(20) %>% 
+  pull(gene)
+# DoHeatmap无兼容问题（内部不调用facets参数）
+heatmap_plot <- DoHeatmap(
+  all_seu_harmony,
+  features = top_de_genes,
+  group.by = c("cell_type", "ICI_Response"),
+  label = FALSE,
+  raster = TRUE
+) + 
+  scale_fill_gradientn(colors = c("blue", "white", "red")) +
+  theme(axis.text.y = element_text(size = 8))
+ggsave(file.path(output_path, "03_DEG", "03_de_heatmap.pdf"), heatmap_plot, width = 12, height = 8)
+cat("    火山图+热图已保存至：", output_path, "\n")
+
+# 3.3 功能富集分析（GO/KEGG）
+cat("3.3 功能富集分析...\n")
+# 安装/加载富集分析包
+if (!require("clusterProfiler")) install.packages("clusterProfiler", repos = "https://mirrors.tuna.tsinghua.edu.cn/CRAN/")
+if (!require("org.Hs.eg.db")) BiocManager::install("org.Hs.eg.db")
+library(clusterProfiler)
+library(org.Hs.eg.db)
+
+# 3.3.1 富集分析函数（批量处理）
+enrich_analysis <- function(gene_list, title, out_prefix) {
+  # 转换基因名到ENTREZ ID
+  gene_entrez <- bitr(
+    gene_list,
+    fromType = "SYMBOL",
+    toType = "ENTREZID",
+    OrgDb = org.Hs.eg.db,
+    drop = TRUE
+  )
+  if (nrow(gene_entrez) < 10) {  # 基因数过少，跳过
+    warning(paste("    ", title, "基因数<10，富集分析跳过"))
+    return(NULL)
+  }
+  # GO富集（BP: 生物过程）
+  go_bp <- enrichGO(
+    gene = gene_entrez$ENTREZID,
+    OrgDb = org.Hs.eg.db,
+    ont = "BP",
+    pAdjustMethod = "fdr",
+    qvalueCutoff = 0.05,
+    readable = TRUE
+  )
+  # KEGG富集
+  kegg <- enrichKEGG(
+    gene = gene_entrez$ENTREZID,
+    organism = "hsa",
+    pvalueCutoff = 0.05
+  )
+  # 保存结果
+  enrich_subdir <- "04_Enrichment"
+  if (!is.null(go_bp)) {
+    fwrite(as.data.frame(go_bp), file.path(output_path, enrich_subdir, paste0(out_prefix, "_GO_BP.csv")))
+    # 可视化GO富集
+    go_plot <- dotplot(go_bp, showCategory = 15) + ggtitle(paste(title, "GO Biological Process"))
+    ggsave(file.path(output_path, enrich_subdir, paste0(out_prefix, "_GO_BP.pdf")), go_plot, width = 10, height = 8)
+  }
+  if (!is.null(kegg)) {
+    fwrite(as.data.frame(kegg), file.path(output_path, enrich_subdir, paste0(out_prefix, "_KEGG.csv")))
+    # 可视化KEGG富集
+    kegg_plot <- dotplot(kegg, showCategory = 15) + ggtitle(paste(title, "KEGG Pathway"))
+    ggsave(file.path(output_path, enrich_subdir, paste0(out_prefix, "_KEGG.pdf")), kegg_plot, width = 10, height = 8)
+  }
+  return(list(GO_BP = go_bp, KEGG = kegg))
+}
+
+
+# 3.3.2 整体差异基因富集（上调+下调分开）
+# 重新定义富集函数：捕获KEGG报错，只保留GO富集（不中断代码）
+enrich_analysis <- function(gene_list, title, out_prefix) {
+  # 转换基因名到ENTREZ ID
+  gene_entrez <- bitr(
+    gene_list,
+    fromType = "SYMBOL",
+    toType = "ENTREZID",
+    OrgDb = org.Hs.eg.db,
+    drop = TRUE
+  )
+  if (nrow(gene_entrez) < 10) {  # 基因数过少，跳过
+    warning(paste("    ", title, "基因数<10，富集分析跳过"))
+    return(NULL)
+  }
+  
+  # ========== 1. GO富集（必执行，无网络依赖） ==========
+  go_bp <- tryCatch({
+    enrichGO(
+      gene = gene_entrez$ENTREZID,
+      OrgDb = org.Hs.eg.db,
+      ont = "BP",
+      pAdjustMethod = "fdr",
+      qvalueCutoff = 0.05,
+      readable = TRUE
+    )
+  }, error = function(e) {
+    warning(paste("    ", title, "GO富集出错：", e$message))
+    return(NULL)
+  })
+  # 保存GO结果
+  enrich_subdir <- "04_Enrichment"
+  if (!is.null(go_bp)) {
+    fwrite(as.data.frame(go_bp), file.path(output_path, enrich_subdir, paste0(out_prefix, "_GO_BP.csv")))
+    go_plot <- dotplot(go_bp, showCategory = 15) + ggtitle(paste(title, "GO Biological Process"))
+    ggsave(file.path(output_path, enrich_subdir, paste0(out_prefix, "_GO_BP.pdf")), go_plot, width = 10, height = 8)
+    cat("    ", title, "GO富集完成\n")
+  }
+  
+  # ========== 2. KEGG富集（捕获网络报错，不中断） ==========
+  kegg <- tryCatch({
+    enrichKEGG(
+      gene = gene_entrez$ENTREZID,
+      organism = "hsa",
+      pvalueCutoff = 0.05
+    )
+  }, error = function(e) {
+    warning(paste("    ", title, "KEGG富集跳过（网络/接口问题）：", e$message))
+    return(NULL)
+  })
+  # 保存KEGG结果（如果成功）
+  if (!is.null(kegg)) {
+    fwrite(as.data.frame(kegg), file.path(output_path, enrich_subdir, paste0(out_prefix, "_KEGG.csv")))
+    kegg_plot <- dotplot(kegg, showCategory = 15) + ggtitle(paste(title, "KEGG Pathway"))
+    ggsave(file.path(output_path, enrich_subdir, paste0(out_prefix, "_KEGG.pdf")), kegg_plot, width = 10, height = 8)
+    cat("    ", title, "KEGG富集完成\n")
+  }
+  
+  return(list(GO_BP = go_bp, KEGG = kegg))
+}
+
+# 上调基因富集
+up_genes <- de_all %>% filter(p_val_adj < 0.05 & avg_log2FC > 0.5) %>% pull(gene)
+enrich_analysis(up_genes, "Sensitive Up (All Cells)", "03_enrich_up_all")
+
+# 下调基因富集
+down_genes <- de_all %>% filter(p_val_adj < 0.05 & avg_log2FC < -0.5) %>% pull(gene)
+enrich_analysis(down_genes, "Sensitive Down (All Cells)", "03_enrich_down_all")
+
+
+
+# 3.3.3 核心细胞类型差异基因富集（CD8+ T细胞）
+if ("CD8+ T细胞" %in% names(de_by_celltype)) {
+  cd8_up <- de_by_celltype[["CD8+ T细胞"]] %>% filter(p_val_adj < 0.05 & avg_log2FC > 0.5) %>% pull(gene)
+  enrich_analysis(cd8_up, "CD8+ T细胞 (Sensitive Up)", "03_enrich_cd8_up")
+}
+
+# 3.4 保存最终注释后的Seurat对象
+saveRDS(all_seu_harmony, file.path(output_path, "02_CellType", "03_seurat_object_annotated.rds"))
+cat("    注释后的Seurat对象已保存至：", file.path(output_path, "02_CellType", "03_seurat_object_annotated.rds"), "\n")
+
+# 3.5 输出第三步总结
+cat("\n====================== 第三步总结 ======================\n")
+cat(" 细胞类型注释完成：19个聚类→8类核心细胞（T/B/NK/巨噬细胞等）\n")
+cat(" 差异分析完成：整体+4类核心细胞的敏感vs不敏感差异基因\n")
+cat(" 功能富集完成：GO/KEGG富集+可视化（上调/下调基因分开）\n")
+cat(" 所有结果已保存至：", output_path, "\n")
+# ====================== 步骤4：提取B细胞亚群（适配现有代码版） ======================
+cat("步骤4：提取B细胞亚群...\n")
+
+# 4.0 前置检查（适配现有代码的字段命名）
+# 检查核心字段是否存在，避免报错
+if (!"cell_type" %in% colnames(all_seu_harmony@meta.data)) {
+  stop(" 未找到cell_type字段！请先运行细胞类型注释步骤，确保all_seu_harmony$cell_type已赋值")
+}
+if (!"Tissue_Type" %in% colnames(all_seu_harmony@meta.data)) {
+  stop(" 未找到Tissue_Type字段！请检查数据加载步骤是否为细胞赋值Tissue_Type='Tumor'")
+}
+
+# 4.1 筛选B细胞（仅保留肿瘤组织的B细胞，适配中文注释）
+# 关键修改：Cell_Type值为"B细胞"（现有代码注释的是中文，而非目标步骤的"B_cell"）
+b_cell_seu <- subset(
+  all_seu_harmony, 
+  subset = cell_type == "B细胞" & Tissue_Type == "Tumor"  # 核心适配：cell_type（小写）+ 中文"B细胞"
+)
+
+# 4.2 输出B细胞数量统计（适配现有代码的ICI分组）
+total_b_cell <- ncol(b_cell_seu)
+sensitive_b_cell <- sum(b_cell_seu$ICI_Response == "Sensitive")
+insensitive_b_cell <- sum(b_cell_seu$ICI_Response == "Insensitive")
+
+cat("  肿瘤组织B细胞总数：", total_b_cell, "\n")
+cat("  敏感组B细胞数：", sensitive_b_cell, "\n")
+cat("  不敏感组B细胞数：", insensitive_b_cell, "\n")
+
+# 4.3 数量阈值检查（保持目标步骤的统计要求）
+if (total_b_cell < 100) {
+  warning("步骤4警告：B细胞数量过少（<100），统计结果可能不可靠！可放宽质控参数（如percent.mt < 15）")
+}
+if (sensitive_b_cell < 50 | insensitive_b_cell < 50) {
+  warning("步骤4警告：某组B细胞数<50！可：1.放宽质控；2.手动确认B细胞cluster ID；3.增加样本")
+}
+
+# 4.4 保存B细胞数据（路径适配现有代码的output_path）
+saveRDS(
+  b_cell_seu, 
+  file.path(output_path, "05_Bcell", "step5_b_cell_seu.rds")  # 保持目标步骤的文件名，方便后续衔接
+)
+cat("步骤4完成：B细胞亚群已提取，数据已保存至：", file.path(output_path, "05_Bcell", "step5_b_cell_seu.rds"), "\n")
+
+# ========== Debug点（适配现有代码的专属提示） ==========
+# 若B细胞数为0/过少，按以下顺序排查：
+if (total_b_cell == 0) {
+  cat("\n Debug提示：未提取到B细胞，按以下步骤排查：\n")
+  cat("  1. 检查细胞注释：运行table(all_seu_harmony$cell_type)，确认有'B细胞'分组\n")
+  cat("  2. 验证B细胞Marker：运行VlnPlot(all_seu_harmony, features = 'CD19')，找到高表达cluster后手动注释\n")
+  cat("  3. 放宽组织筛选：临时改为Tissue_Type %in% c('Tumor')（若有正常组织可加'Normal'）\n")
+  cat("  4. 检查字段名：确认是cell_type（小写）而非Cell_Type（大写）\n")
+}
+
+
+
+
+
+# ====================== 步骤5：DHX9表达量化与统计检验======================
+cat("步骤5：开始DHX9表达分析...\n")
+
+# 前置检查：安装/加载必要包
+if (!require("effsize")) {
+  install.packages("effsize", repos = "https://mirrors.tuna.tsinghua.edu.cn/CRAN/")
+  library(effsize)
+}
+if (!require("ggpubr")) {  # 用于统计标注、ggboxplot
+  library(ggpubr)
+}
+
+# 5.1 核心检查：DHX9基因是否存在于数据中
+if (!"DHX9" %in% rownames(b_cell_seu)) {
+  stop(" 数据中未找到DHX9基因！请检查：1.基因名是否大写；2.原始数据是否包含该基因")
+}
+
+# 5.2 提取DHX9表达量（归一化后的log表达值）
+dhx9_expr <- GetAssayData(b_cell_seu, slot = "data")["DHX9", ]
+# 转换为数据框，用于统计检验
+dhx9_df <- data.frame(
+  Expression = as.numeric(dhx9_expr),
+  ICI_Response = b_cell_seu$ICI_Response,
+  Cell_ID = names(dhx9_expr)
+)
+# 去除表达量为0的细胞（可选，保留注释便于你决定是否取消）
+dhx9_df_filtered <- dhx9_df[dhx9_df$Expression > 0, ]
+cat("  有DHX9表达的B细胞数：", nrow(dhx9_df_filtered), "\n")
+cat("  其中敏感组：", sum(dhx9_df_filtered$ICI_Response == "Sensitive"), "\n")
+cat("  其中不敏感组：", sum(dhx9_df_filtered$ICI_Response == "Insensitive"), "\n")
+
+# 5.3 组间差异检验（Wilcoxon秩和检验，适配小样本）
+# 用过滤后的数据（无0表达），若过滤后某组为空则用原始数据
+if (length(unique(dhx9_df_filtered$ICI_Response)) < 2) {
+  warning(" 过滤0表达后某组无数据，改用原始数据（包含0表达）分析")
+  stat_test <- wilcox.test(Expression ~ ICI_Response, data = dhx9_df)
+  eff_size <- cohen.d(Expression ~ ICI_Response, data = dhx9_df)
+} else {
+  stat_test <- wilcox.test(Expression ~ ICI_Response, data = dhx9_df_filtered)
+  eff_size <- cohen.d(Expression ~ ICI_Response, data = dhx9_df_filtered)
+}
+
+# 5.4 输出统计结果（补充小样本提示）
+cat("  DHX9表达差异检验结果：\n")
+cat("    p值 =", round(stat_test$p.value, 4), "\n")
+cat("    调整后p值（FDR） =", round(p.adjust(stat_test$p.value, method = "fdr"), 4), "\n")
+cat("    效应量（Cohen's d） =", round(eff_size$estimate, 2), "\n")
+cat("    敏感组DHX9平均表达 =", round(mean(dhx9_df_filtered$Expression[dhx9_df_filtered$ICI_Response == "Sensitive"]), 4), "\n")
+cat("    不敏感组DHX9平均表达 =", round(mean(dhx9_df_filtered$Expression[dhx9_df_filtered$ICI_Response == "Insensitive"]), 4), "\n")
+# 小样本提示
+if (sum(dhx9_df_filtered$ICI_Response == "Insensitive") < 50) {
+  cat("     提示：不敏感组B细胞数<50，建议重点关注效应量（|d|>0.5为中等效应）而非仅看p值\n")
+}
+
+# 5.5 保存统计结果
+stat_result <- list(
+  wilcox_test = stat_test,
+  cohen_d = eff_size,
+  mean_expr = tapply(dhx9_df_filtered$Expression, dhx9_df_filtered$ICI_Response, mean),
+  sample_size = table(dhx9_df_filtered$ICI_Response)
+)
+saveRDS(stat_result, file.path(output_path, "05_Bcell", "step6_stat_result.rds"))
+cat("步骤5完成：DHX9表达统计检验完成\n")
+
+
+
+
+
+# 封装打印+保存绘图函数
+plot_expr_print_save <- function(plot_data, x_col, y_col, title, out_file, width=6, height=5) {
+  p <- ggplot(plot_data, aes(x = .data[[x_col]], y = .data[[y_col]], fill = .data[[x_col]])) +
+    geom_violin(alpha=0.7) + geom_boxplot(width=0.2, color="black") +
+    stat_compare_means(method="wilcox.test", label="p.format") +
+    scale_fill_manual(values = c("#2E86AB", "#E63946")) +
+    labs(x = "ICI Response", y = "Expression (LogNormalized)", title = title) +
+    theme_bw() + theme(legend.position = "none", plot.title = element_text(hjust=0.5))
+  print(p)  # 先打印
+  ggsave(out_file, plot=p, width=width, height=height, dpi=300)  # 再保存
+  return(p)
+}
+
+# 调用函数（DHX9 B细胞分析）
+plot_expr_print_save(
+  plot_data = dhx9_df_filtered,
+  x_col = "ICI_Response",
+  y_col = "Expression",
+  title = "DHX9 Expression in B Cells (ICI-S vs ICI-Ins)",
+  out_file = file.path(output_path, "06_DHX9_Expression", "06_DHX9_bcell_violin.pdf")
+)
+
+
+
+
+
+
+
+
+
+
+# ====================== 步骤7：B细胞DHX9表达与免疫细胞浸润（重点CD8+）关联分析 ======================
+cat("步骤7：分析B细胞DHX9表达与免疫细胞浸润（重点CD8+）的关系...\n")
+
+# 前置检查：确保必要数据存在
+if (!exists("all_seu_harmony")) stop(" 未找到all_seu_harmony对象，请先运行步骤1-3！")
+if (!exists("b_cell_seu")) stop(" 未找到b_cell_seu对象，请先运行步骤4！")
+if (!exists("dhx9_df_filtered")) stop(" 未找到dhx9_df_filtered对象，请先运行步骤5！")
+
+# 7.1 数据准备：计算每个样本（GSM_ID）的免疫细胞浸润比例
+# 7.1.1 提取所有细胞的样本+细胞类型信息
+sample_cell_info <- all_seu_harmony@meta.data %>% 
+  dplyr::select(GSM_ID, ICI_Response, cell_type) %>%  # 显式指定dplyr::select
+  dplyr::mutate(cell_id = rownames(.))  # 显式指定dplyr::mutate
+
+# 7.1.2 定义免疫细胞类型（聚焦核心免疫细胞，匹配前文中文注释）
+immune_cell_types <- c(
+  "CD8+ T细胞", "CD4+ T细胞", "B细胞", "NK细胞", 
+  "巨噬细胞", "树突状细胞", "中性粒细胞"
+)
+
+# 7.1.3 批量计算每个样本的各类免疫细胞浸润比例
+# 步骤1：统计每个样本的总细胞数
+sample_total <- sample_cell_info %>% 
+  dplyr::group_by(GSM_ID, ICI_Response) %>%  # dplyr::group_by
+  dplyr::summarise(total_cells = n(), .groups = "drop")  # dplyr::summarise
+
+# 步骤2：统计每个样本的各类免疫细胞数
+sample_immune_counts <- sample_cell_info %>% 
+  dplyr::filter(cell_type %in% immune_cell_types) %>%  # dplyr::filter
+  dplyr::group_by(GSM_ID, ICI_Response, cell_type) %>% 
+  dplyr::summarise(cell_count = n(), .groups = "drop")
+
+# 步骤3：计算浸润比例（免疫细胞数/样本总细胞数）
+sample_immune_infiltration <- sample_immune_counts %>% 
+  dplyr::left_join(sample_total, by = c("GSM_ID", "ICI_Response")) %>%  # dplyr::left_join
+  dplyr::mutate(infiltration_ratio = cell_count / total_cells) %>% 
+  dplyr::select(GSM_ID, ICI_Response, cell_type, infiltration_ratio)
+
+# 步骤4：转换为宽格式（便于后续关联分析）
+immune_infiltration_wide <- sample_immune_infiltration %>% 
+  tidyr::pivot_wider(  # pivot_wider属于tidyr，也显式指定
+    id_cols = c(GSM_ID, ICI_Response),
+    names_from = cell_type,
+    values_from = infiltration_ratio,
+    names_prefix = "infil_ratio_"
+  ) %>% 
+  replace(is.na(.), 0)  # 无该细胞类型的样本填充为0
+
+# 7.1.4 计算每个样本中B细胞的DHX9平均表达量
+# 先给b_cell_seu@meta.data添加Cell_ID列（值为行名），再关联
+b_cell_meta <- b_cell_seu@meta.data %>% 
+  dplyr::mutate(Cell_ID = rownames(.)) %>%  # 正确：用mutate创建Cell_ID列（值为行名）
+  dplyr::select(GSM_ID, Cell_ID)  # 只保留需要的列
+
+# 关联DHX9表达数据和样本信息
+sample_dhx9 <- dhx9_df_filtered %>% 
+  dplyr::left_join(b_cell_meta, by = "Cell_ID") %>%  # 按Cell_ID关联
+  dplyr::group_by(GSM_ID, ICI_Response) %>% 
+  dplyr::summarise(
+    dhx9_mean = mean(Expression),  # 样本级B细胞DHX9平均表达
+    dhx9_median = median(Expression),
+    .groups = "drop"
+  )
+
+# 7.1.5 合并DHX9表达与免疫细胞浸润数据
+dhx9_immune_infiltration <- merge(
+  sample_dhx9,
+  immune_infiltration_wide,
+  by = c("GSM_ID", "ICI_Response"),
+  all.x = TRUE
+) %>% 
+  replace(is.na(.), 0)  # 填充缺失的浸润比例为0
+
+# 7.2 可视化1：DHX9与所有免疫细胞浸润的相关性热图
+# 7.2.1 提取相关性分析用数据（仅保留DHX9和免疫细胞浸润列）
+corr_data <- dhx9_immune_infiltration %>% 
+  dplyr::select(
+    dhx9_mean,
+    dplyr::starts_with("infil_ratio_")  # dplyr::starts_with
+  ) %>% 
+  dplyr::rename_with(~gsub("infil_ratio_", "", .), dplyr::starts_with("infil_ratio_"))  # dplyr::rename_with
+
+# 7.2.2 计算相关性矩阵（斯皮尔曼相关，适配非正态分布的浸润比例）
+corr_matrix <- cor(corr_data, method = "spearman")
+# 提取DHX9与各免疫细胞的相关性（排序）
+dhx9_immune_corr <- corr_matrix["dhx9_mean", ] %>% 
+  as.data.frame() %>% 
+  dplyr::rename(correlation = ".") %>%  # dplyr::rename
+  dplyr::mutate(immune_cell = rownames(.)) %>% 
+  dplyr::filter(immune_cell != "dhx9_mean") %>% 
+  dplyr::arrange(dplyr::desc(abs(correlation)))  # dplyr::arrange + dplyr::desc
+
+# 7.2.3 绘制相关性热图（聚焦DHX9）
+dhx9_immune_corr_heatmap <- ggplot(dhx9_immune_corr, 
+                                   aes(x = immune_cell, y = 1, fill = correlation)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  # 标注相关系数（保留2位小数）
+  geom_text(aes(label = round(correlation, 2)), color = "black", size = 4.5) +
+  # 配色（蓝=正相关，红=负相关，中性为白）
+  scale_fill_gradient2(
+    low = "#2E86AB", mid = "white", high = "#E63946",
+    midpoint = 0, limits = c(-1, 1),
+    name = "Spearman Correlation"
+  ) +
+  # 坐标轴与标题（突出CD8+ T细胞）
+  labs(
+    x = "Immune Cell Type",
+    y = "",
+    title = "Correlation between B Cell DHX9 Expression and Immune Cell Infiltration"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+    axis.title.x = element_text(size = 10, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9, 
+                               # 高亮CD8+ T细胞标签
+                               color = ifelse(unique(dhx9_immune_corr$immune_cell) == "CD8+ T细胞", "red", "black")),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    legend.position = "right",
+    panel.grid = element_blank()
+  )
+
+#  先打印到绘图窗口
+print(dhx9_immune_corr_heatmap)
+#  保存高分辨率文件
+ggsave(
+  file.path(output_path, "07_Immune_Correlation", "07_DHX9_immune_infiltration_corr_heatmap.pdf"),
+  plot = dhx9_immune_corr_heatmap,
+  width = 8, height = 4, dpi = 300
+)
+ggsave(
+  file.path(output_path, "07_Immune_Correlation", "07_DHX9_immune_infiltration_corr_heatmap.png"),
+  plot = dhx9_immune_corr_heatmap,
+  width = 8, height = 4, dpi = 300
+)
+
+# 7.3 可视化2：重点聚焦DHX9 vs CD8+ T细胞浸润（带分组和统计）
+# 7.3.1 提取DHX9与CD8+ T细胞浸润数据
+dhx9_cd8_data <- dhx9_immune_infiltration %>% 
+  dplyr::select(GSM_ID, ICI_Response, dhx9_mean, `infil_ratio_CD8+ T细胞`) %>% 
+  dplyr::rename(cd8_infil_ratio = `infil_ratio_CD8+ T细胞`) %>%  # 处理特殊字符列名
+  dplyr::filter(dhx9_mean > 0 & cd8_infil_ratio > 0)  # 过滤无表达/无浸润的样本
+
+# 7.3.2 绘制散点图（按ICI分组着色，带回归线+统计标注）
+dhx9_cd8_scatter <- ggplot(dhx9_cd8_data, 
+                           aes(x = cd8_infil_ratio, y = dhx9_mean, color = ICI_Response)) +
+  # 散点（增大尺寸，增加透明度）
+  geom_point(size = 4, alpha = 0.8) +
+  # 分组拟合回归线（95%置信区间）
+  geom_smooth(method = "lm", se = TRUE, alpha = 0.2, linewidth = 1) +
+  # 整体相关性标注（皮尔森+P值）
+  stat_cor(
+    aes(label = paste(..r.label.., ..p.label.., sep = "~`,`~")),
+    method = "pearson",
+    label.x = quantile(dhx9_cd8_data$cd8_infil_ratio, 0.7),
+    label.y = quantile(dhx9_cd8_data$dhx9_mean, 0.9),
+    size = 4,
+    color = "black"
+  ) +
+  # 配色沿用前文（敏感组蓝，不敏感组红）
+  scale_color_manual(values = c("Sensitive" = "#2E86AB", "Insensitive" = "#E63946")) +
+  # 坐标轴与标题
+  labs(
+    x = "CD8+ T Cell Infiltration Ratio (per sample)",
+    y = "Mean DHX9 Expression in B Cells",
+    title = "B Cell DHX9 Expression vs CD8+ T Cell Infiltration",
+    color = "ICI Response"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+    axis.title = element_text(size = 10, face = "bold"),
+    axis.text = element_text(size = 9),
+    legend.position = "top",
+    panel.grid = element_blank()
+  )
+
+#  先打印到绘图窗口
+print(dhx9_cd8_scatter)
+#  保存高分辨率文件
+ggsave(
+  file.path(output_path, "07_Immune_Correlation", "07_DHX9_vs_CD8_infiltration_scatter.pdf"),
+  plot = dhx9_cd8_scatter,
+  width = 7, height = 6, dpi = 300
+)
+ggsave(
+  file.path(output_path, "07_Immune_Correlation", "07_DHX9_vs_CD8_infiltration_scatter.png"),
+  plot = dhx9_cd8_scatter,
+  width = 7, height = 6, dpi = 300
+)
+
+# 7.4 可视化3：DHX9与关键免疫细胞浸润的组合散点图（CD8+/巨噬细胞/NK）
+# 7.4.1 整理组合图数据
+plot_data_comb <- dhx9_immune_infiltration %>% 
+  dplyr::select(
+    GSM_ID, ICI_Response, dhx9_mean,
+    `infil_ratio_CD8+ T细胞`, `infil_ratio_巨噬细胞`, `infil_ratio_NK细胞`
+  ) %>% 
+  tidyr::pivot_longer(  # tidyr::pivot_longer
+    cols = c(`infil_ratio_CD8+ T细胞`, `infil_ratio_巨噬细胞`, `infil_ratio_NK细胞`),
+    names_to = "immune_type",
+    values_to = "infil_ratio"
+  ) %>% 
+  dplyr::mutate(
+    immune_type = gsub("infil_ratio_", "", immune_type),
+    immune_type = factor(immune_type, levels = c("CD8+ T细胞", "巨噬细胞", "NK细胞"))
+  ) %>% 
+  dplyr::filter(dhx9_mean > 0 & infil_ratio > 0)
+
+# 7.4.2 绘制组合散点图（分面展示）
+dhx9_immune_comb_plot <- ggplot(plot_data_comb, 
+                                aes(x = infil_ratio, y = dhx9_mean, color = ICI_Response)) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE, alpha = 0.2, linewidth = 0.8) +
+  stat_cor(method = "pearson", size = 3, show.legend = FALSE) +
+  scale_color_manual(values = c("Sensitive" = "#2E86AB", "Insensitive" = "#E63946")) +
+  facet_wrap(~immune_type, ncol = 3, scales = "free_x") +
+  labs(
+    x = "Immune Cell Infiltration Ratio",
+    y = "Mean DHX9 Expression in B Cells",
+    title = "B Cell DHX9 vs Key Immune Cell Infiltration",
+    color = "ICI Response"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+    axis.title = element_text(size = 10, face = "bold"),
+    axis.text = element_text(size = 8),
+    legend.position = "top",
+    panel.grid = element_blank(),
+    strip.text = element_text(size = 9, face = "bold")
+  )
+
+#  先打印到绘图窗口
+print(dhx9_immune_comb_plot)
+#  保存高分辨率文件
+ggsave(
+  file.path(output_path, "07_Immune_Correlation", "07_DHX9_vs_key_immune_infiltration_comb.pdf"),
+  plot = dhx9_immune_comb_plot,
+  width = 12, height = 5, dpi = 300
+)
+ggsave(
+  file.path(output_path, "07_Immune_Correlation", "07_DHX9_vs_key_immune_infiltration_comb.png"),
+  plot = dhx9_immune_comb_plot,
+  width = 12, height = 5, dpi = 300
+)
+
+# 7.5 输出统计结果（DHX9与CD8+浸润的相关性）
+cd8_corr <- cor.test(
+  x = dhx9_cd8_data$cd8_infil_ratio,
+  y = dhx9_cd8_data$dhx9_mean,
+  method = "pearson"
+)
+cat("  B细胞DHX9与CD8+ T细胞浸润的相关性结果：\n")
+cat("    皮尔森相关系数 r =", round(cd8_corr$estimate, 4), "\n")
+cat("    p值 =", round(cd8_corr$p.value, 4), "\n")
+cat("    95%置信区间：", round(cd8_corr$conf.int[1], 4), "~", round(cd8_corr$conf.int[2], 4), "\n")
+
+# 7.6 保存关联分析结果
+dhx9_immune_result <- list(
+  corr_matrix = corr_matrix,
+  dhx9_immune_corr = dhx9_immune_corr,
+  cd8_corr_result = cd8_corr,
+  plot_data = dhx9_immune_infiltration
+)
+saveRDS(
+  dhx9_immune_result,
+  file.path(output_path, "07_Immune_Correlation", "07_DHX9_immune_infiltration_result.rds")
+)
+
+# 7.7 输出步骤7总结
+cat("\n====================== 步骤7总结 ======================\n")
+cat(" B细胞DHX9与免疫细胞浸润关联分析完成！\n")
+cat(" 生成文件：\n")
+cat("   - 07_DHX9_immune_infiltration_corr_heatmap.pdf/png（DHX9与所有免疫细胞浸润相关性热图）\n")
+cat("   - 07_DHX9_vs_CD8_infiltration_scatter.pdf/png（DHX9 vs CD8+ T细胞浸润散点图）\n")
+cat("   - 07_DHX9_vs_key_immune_infiltration_comb.pdf/png（DHX9与关键免疫细胞浸润组合图）\n")
+cat(" 所有结果已保存至：", output_path, "\n")

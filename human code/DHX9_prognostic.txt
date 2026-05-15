@@ -1,0 +1,801 @@
+# rm(1ist=ls(all=True))
+#install.packages('devtools ')
+# 安装未安装的包（首次运行需执行）
+if (!require("Seurat")) install.packages("Seurat")
+if (!require("tidyverse")) install.packages("tidyverse")
+if (!require("patchwork")) install.packages("patchwork")
+if(!require(CIBERSORT))devtools::install_github("Moonerss/CIBERSORT")
+install.packages("BiocManager")
+# 加载BiocManager
+library(BiocManager)
+# 安装preprocessCore，指定镜像可加快速度（可选，针对国内用户）
+install("preprocessCore", update = FALSE)
+# 加载包
+library(BiocManager)
+library(Seurat)
+library(tidyverse)
+library(patchwork)
+library(CIBERSORT)
+library(ggplot2) #绘图
+library(pheatmap) #绘制热图
+library(ggpubr) #堆积比例图
+library(reshape2) #数据处理
+data(LM22)
+
+# ==============================================================================
+# 步骤1：读取10X格式单细胞数据，构建Seurat对象
+# ==============================================================================
+# 设置数据目录（修改为你的3个文件所在路径，末尾无需加/）
+data_dir <- file.path("D:", "document", "code", "DHX9", "data", "GSE261388")
+
+# 读取10X表达数据（支持直接读取.gz压缩包，无需解压）
+sc_counts <- Read10X(
+  data.dir = data_dir,
+  gene.column = 2  # 提取基因符号（第2列），而非Ensembl ID（第1列）
+)
+
+# 构建Seurat对象，设置基础过滤条件（去除低质量细胞）
+sc_obj <- CreateSeuratObject(
+  counts = sc_counts,
+  project = "GSE261388_CRC",
+  min.cells = 3,    # 一个基因至少在3个细胞中表达才保留
+  min.features = 200  # 一个细胞至少表达200个基因才保留（去除空滴/死细胞）
+)
+
+# 查看Seurat对象基本信息
+cat("构建完成的Seurat对象信息：\n")
+print(sc_obj)
+# ==============================================================================
+# 步骤2：单细胞数据质控（去除低质量细胞/基因，保证数据可靠性）
+# ==============================================================================
+# 计算质控指标：线粒体基因比例（反映细胞活性，死细胞线粒体比例高）
+# 人类线粒体基因以"MT-"开头，该函数自动计算每个细胞的线粒体基因表达比例
+sc_obj[["percent.mt"]] <- PercentageFeatureSet(sc_obj, pattern = "^MT-")
+
+# 绘制质控散点图，辅助判断过滤阈值（可视化验证，可选但推荐）
+qc_plot <- VlnPlot(
+  sc_obj,
+  features = c("nFeature_RNA", "nCount_RNA", "percent.mt"),
+  ncol = 3,
+  pt.size = 0.1,
+)
+print(qc_plot)
+
+# 执行质控过滤（针对GSE261388结直肠癌数据的优化阈值，可根据qc_plot微调）
+sc_obj <- subset(
+  sc_obj,
+  subset = nFeature_RNA > 200 &  # 基因数下限：保留表达≥200个基因的细胞
+    nFeature_RNA < 5000 &  # 基因数上限：去除双细胞/多细胞聚集体（这类细胞基因数异常高）
+    percent.mt < 10  # 线粒体基因比例<10%：去除死细胞（线粒体泄露，比例过高）
+)
+
+# 查看质控后的Seurat对象信息，确认细胞数量合理减少
+cat("质控后的Seurat对象信息：\n")
+print(sc_obj)
+# ==============================================================================
+# 步骤3：数据归一化、标准化与高变基因筛选
+# ==============================================================================
+# 归一化（默认LogNormalize方法，消除细胞间测序深度差异，结果存储在sc_obj@assays$RNA@data）
+sc_obj <- NormalizeData(
+  sc_obj,
+  normalization.method = "LogNormalize",
+  scale.factor = 10000  # 归一化到每个细胞总表达量为10000
+)
+
+# 筛选高变基因（后续降维聚类的核心，反映细胞间的异质性差异）
+sc_obj <- FindVariableFeatures(
+  sc_obj,
+  selection.method = "vst",  # 常用的变异稳定化方法，适合单细胞数据
+  nfeatures = 2000,  # 筛选2000个高变基因，符合单细胞分析常规
+  verbose = FALSE
+)
+
+# 标准化（消除线粒体比例、基因表达量差异对聚类的影响，结果存储在sc_obj@assays$RNA@scale.data）
+sc_obj <- ScaleData(
+  sc_obj,
+  vars.to.regress = "percent.mt",  # 校正线粒体基因比例的干扰
+  verbose = FALSE
+)
+# ==============================================================================
+# 步骤4：降维与细胞聚类（识别不同细胞亚型）
+# ==============================================================================
+# PCA降维（基于筛选出的高变基因，压缩数据维度，减少噪音）
+sc_obj <- RunPCA(
+  sc_obj,
+  features = VariableFeatures(object = sc_obj),
+  verbose = FALSE
+)
+
+# 可视化PCA结果（验证降维效果，可选）
+pca_plot <- DimPlot(sc_obj, reduction = "pca") + ggtitle("PCA Dimensionality Reduction")
+print(pca_plot)
+
+# UMAP降维（更适合单细胞数据的可视化，保留数据局部结构，便于观察细胞聚类）
+sc_obj <- RunUMAP(
+  sc_obj,
+  dims = 1:15,  # 选取前15个PC维度（常规10-20，可根据JackStraw结果微调）
+  verbose = FALSE
+)
+
+# 细胞聚类（构建细胞邻居网络并分群，resolution控制聚类精细度）
+sc_obj <- FindNeighbors(sc_obj, dims = 1:15, verbose = FALSE)
+sc_obj <- FindClusters(
+  sc_obj,
+  resolution = 0.8,  # 0.5-1.0为常规范围，分辨率越高，聚类数量越多
+  verbose = FALSE
+)
+
+# 可视化UMAP聚类结果（标注细胞聚类ID，观察分群效果）
+umap_cluster_plot <- DimPlot(
+  sc_obj,
+  reduction = "umap",
+  label = TRUE,
+  repel = TRUE  # 避免标签重叠
+) + ggtitle("UMAP Cell Clustering")
+print(umap_cluster_plot)
+# ==============================================================================
+# 步骤5：精准提取B细胞群
+# ==============================================================================
+# 1. 验证经典B细胞marker基因的表达（确认B细胞聚类，可视化参考）
+B_cell_markers <- c("CD19", "CD79A", "MS4A1", "CD79B")  # 人类B细胞特异性marker
+VlnPlot(sc_obj, features = B_cell_markers, pt.size = 0.1) + ggtitle("B Cell Marker Gene Expression Validation")
+
+# 2. 基于marker基因表达筛选纯B细胞（高表达至少2种B细胞marker）
+# 第一步：提取B细胞marker基因的表达矩阵（从Seurat对象中取出RNA归一化表达数据）
+b_marker_expr_matrix <- as.matrix(sc_obj@assays$RNA@data[B_cell_markers, ])
+
+# 第二步：使用apply函数批量计算每个细胞（列）有多少种marker有表达（表达值>0）
+# MARGIN=2：表示对矩阵的「列」进行运算（每个列对应一个细胞）
+b_marker_count_per_cell <- apply(
+  X = b_marker_expr_matrix,
+  MARGIN = 2,
+  FUN = function(x) sum(x > 0) >= 2  # 每个细胞至少2种B细胞marker有表达
+)
+
+# 第三步：将筛选结果添加到Seurat对象的meta.data中
+sc_obj$is_B_cell <- b_marker_count_per_cell
+
+# 3. 提取B细胞群，生成独立的Seurat对象（后续仅针对B细胞分析）
+b_cells <- subset(sc_obj, is_B_cell == TRUE)
+
+# 4. 简化B细胞对象，提升后续分析速度（移除无效的dims参数，仅保留RNA分析集即可）
+b_cells <- DietSeurat(b_cells, assays = "RNA") 
+
+# 5. 查看提取结果，验证B细胞对象有效性
+cat("提取的B细胞数量：", ncol(b_cells), "\n")
+cat("B细胞对象基本信息：\n")
+print(b_cells)
+# ==============================================================================
+# 步骤6：B细胞按DHX9表达量分组（高/低表达，衔接当前B细胞对象）
+# ==============================================================================
+# 1. 查看DHX9在B细胞中的表达分布（可视化验证，确认表达差异存在）
+VlnPlot(b_cells, features = "DHX9", pt.size = 0.1) + ggtitle("DHX9 Expression in B Cells")
+hist(b_cells@assays$RNA@data["DHX9", ], main = "DHX9 Normalized Expression Distribution", xlab = "DHX9 Expression")
+
+# 2. 提取DHX9归一化表达值，计算中位数作为分组阈值（可重复性最强）
+dhx9_expression <- b_cells@assays$RNA@data["DHX9", ]  # 提取DHX9归一化表达矩阵
+dhx9_median <- median(dhx9_expression)  # 计算中位数阈值
+cat("DHX9表达量中位数（分组阈值）：", dhx9_median, "\n")
+
+# 3. 进行高/低表达分组，结果添加到b_cells对象的meta.data中
+b_cells$DHX9_group <- ifelse(dhx9_expression > dhx9_median, "DHX9_high", "DHX9_low")
+
+# 4. 验证分组结果，查看两组细胞数量分布
+cat("DHX9高/低表达组B细胞数量分布：\n")
+print(table(b_cells$DHX9_group))
+
+# 5. 可视化分组差异（确认DHX9在两组中的表达差异显著）
+VlnPlot(b_cells, features = "DHX9", group.by = "DHX9_group", pt.size = 0.1) + 
+  ggtitle("DHX9 High/Low Expression Group B Cell Expression Validation")
+# ==============================================================================
+# 步骤7：给b_cells标注LM22原始3种B细胞亚型（衔接步骤6 DHX9分组结果）
+# ==============================================================================
+# 1. 定义LM22原始3种B细胞亚型及其特异性marker基因（严格匹配LM22，保证亚型准确性）
+# 注：marker基因均选自原始LM22基因集，避免后续基因不匹配
+B_subtype_markers <- list(
+  "B cells naive" = c("TCL1A", "FCMR", "IGHM", "CD19"),  # 初始B细胞（LM22对应亚型）
+  "B cells memory" = c("CD27", "IGHG1", "MS4A1", "CD79B"),  # 记忆B细胞（LM22对应亚型）
+  "Plasma cells" = c("IGHA1", "IGHG4", "SDC1", "PRDM1")  # 浆细胞（LM22对应亚型，SDC1=CD138）
+)
+
+# 2. 提取b_cells的归一化表达数据（步骤6已完成DHX9分组，直接提取即可）
+# 转换为普通矩阵，方便后续计算（保留与LM22一致的基因表达格式）
+b_expr_matrix <- as.matrix(b_cells@assays$RNA@data)
+cat("B细胞表达矩阵维度：", nrow(b_expr_matrix), "个基因 ×", ncol(b_expr_matrix), "个细胞\n")
+
+# 3. 初始化亚型标注向量，用于存储每个细胞的最终LM22 B亚型标注
+# 命名与细胞ID对应，避免后续匹配混乱
+b_cell_LM22_subtype <- character(ncol(b_cells))
+names(b_cell_LM22_subtype) <- colnames(b_cells)
+
+# 4. 循环计算每个细胞的3种亚型得分，匹配最佳对应亚型
+# 核心逻辑：每种亚型的marker基因平均表达量作为"得分"，得分最高即为该细胞的亚型
+for (cell_idx in 1:ncol(b_cells)) {
+  # 提取单个细胞的所有基因表达数据
+  single_cell_expr <- b_expr_matrix[, cell_idx]
+  
+  # 计算3种B细胞亚型的各自得分（有效marker基因的平均表达量）
+  subtype_scores <- sapply(B_subtype_markers, function(markers) {
+    # 筛选有效marker（同时存在于B细胞表达矩阵和LM22基因集，避免报错）
+    valid_markers <- intersect(markers, rownames(b_expr_matrix))
+    # 无有效marker时得分设为0，避免NA干扰
+    if (length(valid_markers) == 0) {
+      return(0)
+    }
+    # 计算该亚型的平均表达量（得分越高，细胞越倾向于该亚型）
+    mean(single_cell_expr[valid_markers], na.rm = TRUE)
+  })
+  
+  # 选取得分最高的亚型，作为该细胞的LM22 B亚型标注
+  b_cell_LM22_subtype[cell_idx] <- names(subtype_scores)[which.max(subtype_scores)]
+}
+
+# 5. 将亚型标注结果添加到b_cells的meta.data中（与步骤6的DHX9_group并列存储）
+# 后续可直接通过"LM22_B_subtype"调用该标注结果，用于构建组合亚型
+b_cells$LM22_B_subtype <- b_cell_LM22_subtype
+
+# 6. 验证亚型标注结果（量化分布+可视化，确保标注有效）
+cat("\n=== LM22 3种B细胞亚型标注结果分布 ===\n")
+subtype_distribution <- table(b_cells$LM22_B_subtype)
+print(subtype_distribution)
+
+# 7. 可视化验证1：3种亚型中DHX9的表达分布（确认亚型与DHX9分组无冲突）
+p1 <- VlnPlot(
+  b_cells,
+  features = "DHX9",
+  group.by = "LM22_B_subtype",
+  pt.size = 0.1,
+  cols = c("#2E86AB", "#A23B72", "#F18F01")
+) + ggtitle("DHX9 Expression in LM22 3 B Cell Subtypes") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# 8. 可视化验证2：代表性B细胞marker的亚型表达差异（确认标注准确性）
+p2 <- VlnPlot(
+  b_cells,
+  features = "MS4A1",  # MS4A1=CD20，记忆B细胞高表达
+  group.by = "LM22_B_subtype",
+  pt.size = 0.1,
+  cols = c("#2E86AB", "#A23B72", "#F18F01")
+) + ggtitle("B Cell Marker MS4A1 Expression in 3 Subtypes") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+library(patchwork)
+print(p1 + p2)
+
+# 9. 最终验证：确认meta.data中同时包含DHX9分组和LM22亚型（为后续步骤做准备）
+cat("\n=== b_cells对象meta.data关键列验证 ===\n")
+print(head(b_cells@meta.data[, c("DHX9_group", "LM22_B_subtype")]))
+
+# ==============================================================================
+# 步骤8：构建6种新B细胞亚型表达矩阵（衔接步骤7，匹配原始LM22基因集）
+# ==============================================================================
+
+# 1. 提取原始LM22的核心基因集和B细胞亚型列表
+LM22_core_genes <- rownames(LM22)
+# 提取LM22中所有B细胞亚型（精准匹配，避免包含其他免疫细胞）
+LM22_all_B_subtypes <- grep(pattern = "B cell", x = colnames(LM22), value = TRUE)
+cat("原始LM22基因集数量：", length(LM22_core_genes), "\n")
+cat("原始LM22中B细胞亚型数量：", length(LM22_all_B_subtypes), "\n")
+cat("LM22中的B细胞亚型：", paste(LM22_all_B_subtypes, collapse = ", "), "\n")
+
+# 2. 生成「LM22 B亚型×DHX9水平」的6种组合亚型
+b_cells$combined_B_subtype <- paste(
+  b_cells$LM22_B_subtype,
+  b_cells$DHX9_group,
+  sep = "_"
+)
+# 验证组合亚型（预期6种：3种B亚型×2种DHX9分组）
+unique_combined_subtypes <- unique(b_cells$combined_B_subtype)
+cat("\n=== 生成的6种新B细胞组合亚型 ===\n")
+print(unique_combined_subtypes)
+cat("组合亚型数量：", length(unique_combined_subtypes), "（预期为6种）\n")
+
+# 3. 筛选并匹配B细胞表达矩阵与LM22核心基因集
+# 3.1 提取归一化表达矩阵
+b_raw_expr <- as.matrix(b_cells@assays$RNA@data)
+# 3.2 剔除LM22基因集外的多余基因
+b_expr_filtered <- b_raw_expr[intersect(rownames(b_raw_expr), LM22_core_genes), ]
+# 3.3 提取缺失的LM22基因
+missing_LM22_genes <- setdiff(LM22_core_genes, rownames(b_expr_filtered))
+cat("\n=== 待补充的LM22缺失基因数量：", length(missing_LM22_genes), "===\n")
+
+# 3.4 核心修改：按「细胞所属的LM22 B亚型」填充缺失基因的原始LM22固定值
+if (length(missing_LM22_genes) > 0) {
+  # 初始化缺失基因的表达矩阵（行=缺失基因，列=所有B细胞）
+  missing_genes_expr <- matrix(
+    NA,
+    nrow = length(missing_LM22_genes),
+    ncol = ncol(b_expr_filtered),
+    dimnames = list(missing_LM22_genes, colnames(b_expr_filtered))
+  )
+  
+  # 遍历每个细胞，按其所属的LM22 B亚型赋值
+  for (cell_id in colnames(missing_genes_expr)) {
+    # 获取该细胞对应的原始LM22 B亚型
+    cell_B_subtype <- b_cells@meta.data[cell_id, "LM22_B_subtype"]
+    
+    # 检查该亚型是否在LM22中存在（避免匹配错误）
+    if (!cell_B_subtype %in% colnames(LM22)) {
+      warning(paste("细胞", cell_id, "的亚型", cell_B_subtype, "不在LM22中，填充该基因在LM22的B细胞均值"))
+      # 兜底方案：取该基因在所有LM22 B亚型的均值
+      cell_B_subtype_val <- rowMeans(LM22[missing_LM22_genes, LM22_all_B_subtypes, drop = FALSE], na.rm = TRUE)
+    } else {
+      # 核心逻辑：取该细胞所属B亚型在LM22中的原始固定值
+      cell_B_subtype_val <- LM22[missing_LM22_genes, cell_B_subtype]
+    }
+    
+    # 为该细胞的所有缺失基因赋值（同一亚型的所有细胞，缺失基因值完全相同）
+    missing_genes_expr[, cell_id] <- cell_B_subtype_val
+  }
+  
+  # 验证：同一B亚型的高/低DHX9细胞，缺失基因表达值是否一致（示例）
+  cat("\n=== 验证：同一B亚型的DHX9高低分组缺失基因表达值是否一致 ===\n")
+  test_subtype <- LM22_all_B_subtypes[1] # 取第一个B亚型作为测试
+  test_cells_high <- colnames(b_expr_filtered)[b_cells$LM22_B_subtype == test_subtype & b_cells$DHX9_group == "High"]
+  test_cells_low <- colnames(b_expr_filtered)[b_cells$LM22_B_subtype == test_subtype & b_cells$DHX9_group == "Low"]
+  if (length(test_cells_high) > 0 & length(test_cells_low) > 0) {
+    test_gene <- missing_LM22_genes[1] # 取第一个缺失基因作为测试
+    val_high <- unique(missing_genes_expr[test_gene, test_cells_high])
+    val_low <- unique(missing_genes_expr[test_gene, test_cells_low])
+    cat("测试B亚型：", test_subtype, "\n")
+    cat("测试缺失基因：", test_gene, "\n")
+    cat("DHX9高分组表达值：", val_high, "\n")
+    cat("DHX9低分组表达值：", val_low, "\n")
+    cat("高/低分组值是否一致：", identical(val_high, val_low), "\n")
+  }
+  
+  # 合并矩阵：筛选后矩阵 + 缺失基因固定值矩阵
+  b_expr_filtered <- rbind(b_expr_filtered, missing_genes_expr)
+}
+
+# 3.5 按LM22核心基因集顺序重新排序（保证与原始LM22基因顺序完全一致）
+b_expr_final <- b_expr_filtered[LM22_core_genes, ]
+cat("\n=== B细胞表达矩阵与LM22匹配结果 ===\n")
+cat("匹配后矩阵维度：", nrow(b_expr_final), "基因 ×", ncol(b_expr_final), "细胞\n")
+cat("与LM22基因顺序是否一致：", all(rownames(b_expr_final) == LM22_core_genes), "\n")
+
+# 4. 计算每种组合亚型的基因平均表达量（模拟LM22格式）
+combined_subtype_expr <- t(sapply(unique_combined_subtypes, function(subtype_name) {
+  subtype_cell_ids <- colnames(b_expr_final)[b_cells$combined_B_subtype == subtype_name]
+  if (length(subtype_cell_ids) == 0) {
+    # 极端情况：亚型无细胞，取该亚型在LM22的原始均值
+    pure_subtype <- strsplit(subtype_name, "_")[[1]][1] # 提取组合亚型中的原始B亚型
+    if (pure_subtype %in% colnames(LM22)) {
+      return(LM22[LM22_core_genes, pure_subtype])
+    } else {
+      return(rowMeans(LM22[LM22_core_genes, LM22_all_B_subtypes], na.rm = TRUE))
+    }
+  }
+  # 计算该组合亚型所有细胞的基因均值
+  return(rowMeans(b_expr_final[, subtype_cell_ids, drop = FALSE], na.rm = TRUE))
+}))
+
+# 5. 调整矩阵格式：行=基因，列=组合亚型（与原始LM22格式一致）
+new_B_subtype_expr <- t(combined_subtype_expr)
+
+# 6. 保存最终矩阵
+output_path <- file.path("D:", "document", "code", "DHX9", "result", "01_Bcell_Extraction")
+dir.create(output_path, showWarnings = FALSE, recursive = TRUE)
+write.table(
+  new_B_subtype_expr,
+  file = file.path(output_path, "new_B_subtype_expr.tsv"),
+  sep = "\t",
+  quote = FALSE,
+  row.names = TRUE,
+  col.names = TRUE
+)
+cat("\n最终6种B细胞亚型表达矩阵已保存至：", file.path(output_path, "new_B_subtype_expr.tsv"), "\n")
+cat("矩阵维度：", nrow(new_B_subtype_expr), "基因 ×", ncol(new_B_subtype_expr), "组合亚型\n")
+
+
+
+# 阶段二 结合TCGA 分析预后
+if (!require("SummarizedExperiment")) BiocManager::install("SummarizedExperiment")
+if (!require("tidyverse")) install.packages("tidyverse")
+if (!require("survival")) install.packages("survival")
+if (!require("survminer")) install.packages("survminer")
+library(SummarizedExperiment)
+library(tidyverse)
+library(survival)
+library(survminer)
+library(edgeR)
+# 读取表达数据（适配你的文件路径，row.names=1指定第一列为基因标识）
+expr_path <- "D:/document/code/DHX9/data/TCGA.COADREAD.sampleMap_HiSeqV2/HiSeqV2"
+rna_expr <- read.delim(
+  file = expr_path,
+  sep = "\t",  # 制表符分隔，匹配文件格式
+  row.names = 1,
+  check.names = FALSE  # 保留样本ID原始格式，不自动修改特殊字符
+)
+
+# 转换为矩阵格式，方便后续处理
+rna_expr <- as.matrix(rna_expr)
+
+# 查看表达数据维度（验证是否读取成功：20531个基因 × 434个样本）
+cat("基因表达矩阵维度：", nrow(rna_expr), "基因 ×", ncol(rna_expr), "样本\n")
+head(rna_expr[, 1:5])  # 查看前5个基因、前5个样本的表达值
+# 读取生存数据（适配你的文件路径）
+surv_path <- "D:/document/code/DHX9/data/Curated_survival_data.txt"
+surv_data <- read.delim(
+  file = surv_path,
+  sep = "\t",
+  check.names = FALSE
+)
+
+# 数据清洗：只保留核心字段（样本ID、OS、OS.time），剔除OS或OS.time缺失的样本
+surv_data_clean <- surv_data %>%
+  dplyr::select(sample, OS, OS.time) %>%
+  filter(!is.na(OS) & !is.na(OS.time))
+
+# 查看生存数据维度（验证是否读取成功：约700+个样本）
+cat("清洗后生存数据样本数：", nrow(surv_data_clean), "\n")
+head(surv_data_clean)
+# 步骤1：提取表达数据的样本ID（列名）和生存数据的样本ID（sample列）
+expr_samples <- colnames(rna_expr)
+surv_samples <- surv_data_clean$sample
+
+# 步骤2：找到两者共有的样本ID（只保留同时存在的样本，保证数据匹配）
+common_samples <- intersect(expr_samples, surv_samples)
+
+# 步骤3：筛选表达数据和生存数据，只保留共有样本
+rna_expr_final <- rna_expr[, common_samples]
+surv_data_final <- surv_data_clean %>%
+  filter(sample %in% common_samples) %>%
+  arrange(match(sample, colnames(rna_expr_final)))  # 保证样本顺序完全一致
+
+# 步骤4：验证匹配结果（表达数据列数 = 生存数据行数，说明匹配成功）
+cat("最终匹配后样本数：", ncol(rna_expr_final), "（表达数据）=", nrow(surv_data_final), "（生存数据）\n")
+stopifnot(ncol(rna_expr_final) == nrow(surv_data_final))  # 不匹配则报错，及时发现问题
+# 1. 设置工作目录
+setwd("D:/document/code/DHX9")
+
+# 2. 加载所需包
+library(CIBERSORT)
+library(ggplot2)
+library(pheatmap)
+library(reshape2)
+library(ggpubr)
+library(tidyverse)
+library(limma)
+
+# 3. 重新读取表达矩阵并清洗（DEG_expr）
+expr_path <- "D:/document/code/DHX9/data/TCGA.COADREAD.sampleMap_HiSeqV2/HiSeqV2"
+DEG_expr <- read.delim(
+  expr_path, 
+  sep = "\t", 
+  row.names = 1, 
+  check.names = FALSE,
+  na.strings = c("", "NA", "N/A")  # 明确识别缺失值
+)
+
+# 3.1 转换为矩阵并筛选纯数值型
+DEG_expr <- as.matrix(DEG_expr)
+mode(DEG_expr) <- "numeric"  # 强制转换为数值型模式
+DEG_expr[is.infinite(DEG_expr)] <- 0  # 消除无限值
+DEG_expr[is.na(DEG_expr)] <- 0  # 缺失值填充为0（CIBERSORT不允许缺失值）
+
+# 3.2 标准化（消除样本间差异，同时确保无负数值）
+DEG_expr <- normalizeBetweenArrays(DEG_expr)
+DEG_expr[DEG_expr < 0] <- 0  # 负数值修正为0（避免后续运算错误）
+
+# 3.3 标准化基因名（去除特殊字符，确保与LM22_mine匹配）
+rownames(DEG_expr) <- make.names(rownames(DEG_expr), unique = TRUE)
+
+# 4. 重新读取LM22_mine并清洗（核心：纯数值型矩阵）
+LM22_mine <- read.delim(
+  file.path("D:", "document", "code", "DHX9", "result", "01_Bcell_Extraction", "new_B_subtype_expr.tsv"),
+  sep = "\t", 
+  header = TRUE, 
+  row.names = 1,
+  na.strings = c("", "NA", "N/A")
+)
+
+# 4.1 转换为矩阵并筛选纯数值型
+LM22_mine <- as.matrix(LM22_mine)
+mode(LM22_mine) <- "numeric"  # 强制转换为数值型模式
+LM22_mine[is.infinite(LM22_mine)] <- 0
+LM22_mine[is.na(LM22_mine)] <- 0
+
+# 4.2 标准化基因名（与DEG_expr保持格式一致）
+rownames(LM22_mine) <- make.names(rownames(LM22_mine), unique = TRUE)
+
+# 5. 提取两者共有的基因（关键：保证基因集匹配，避免维度错误）
+common_genes <- intersect(rownames(DEG_expr), rownames(LM22_mine))
+if (length(common_genes) == 0) {
+  stop("ERROR：表达矩阵和LM22_mine无共现基因，请检查基因名格式！")
+}
+
+# 5.1 筛选共现基因数据
+DEG_expr_common <- DEG_expr[common_genes, ]
+LM22_mine_common <- LM22_mine[common_genes, ]
+
+# 5.2 验证数据格式（纯数值型，无缺失值）
+cat("表达矩阵是否为纯数值型：", is.numeric(DEG_expr_common), "\n")
+cat("LM22_mine是否为纯数值型：", is.numeric(LM22_mine_common), "\n")
+cat("表达矩阵缺失值数量：", sum(is.na(DEG_expr_common)), "\n")
+cat("LM22_mine缺失值数量：", sum(is.na(LM22_mine_common)), "\n")
+
+
+
+
+# 6. 运行CIBERSORT（核心反卷积步骤，获取B细胞亚型浸润分数）
+result <- cibersort(
+  sig_matrix = LM22_mine_common,  # 清洗后的6种B细胞亚型特征矩阵
+  mixture_file = DEG_expr_common, # 清洗后的TCGA结直肠癌表达矩阵
+  perm = 5,                    # 置换检验次数，保证P值可靠性（用于后续筛选可靠样本）
+  QN = TRUE                       # 分位数归一化，提升不同样本间浸润分数的可比性
+)
+
+# 7. 结果验证与保存
+# 7.1 查看结果维度，确认数据完整性
+cat("CIBERSORT反卷积结果维度：", nrow(result), "样本 ×", ncol(result), "字段\n")
+head(result[, 1:(ncol(LM22_mine_common)+1)])  # 预览亚型浸润分数与P值，验证结果格式
+
+# 7.2 保存结果至本地，后续预后分析直接读取
+output_path_cibersort <- file.path("D:", "document", "code", "DHX9", "result", "02_CIBERSORT")
+dir.create(output_path_cibersort, showWarnings = FALSE, recursive = TRUE)
+write.csv(
+  result,
+  file = file.path(output_path_cibersort, "cibersort_result.csv"),
+  row.names = TRUE  # 保留样本ID作为行名，方便后续与生存数据匹配
+)
+cat("CIBERSORT结果已保存，路径：", file.path(output_path_cibersort, "cibersort_result.csv"), "\n")
+
+
+
+
+
+
+# 8. 读取并初步清洗生存数据（保留核心预后字段）
+surv_path <- "D:/document/code/DHX9/data/Curated_survival_data.txt"
+surv_data <- read.delim(
+  file = surv_path,
+  sep = "\t",
+  check.names = FALSE
+)
+
+# 8.1 筛选核心字段，剔除缺失值
+surv_data_clean <- surv_data %>%
+  dplyr::select(sample, OS, OS.time) %>%
+  filter(!is.na(OS) & !is.na(OS.time))
+
+# 9. 读取并清洗CIBERSORT结果
+cibersort_result <- read.csv(
+  file.path("D:", "document", "code", "DHX9", "result", "02_CIBERSORT", "cibersort_result.csv"),
+  check.names = FALSE,
+  row.names = 1  # 恢复样本ID为行名，与生存数据格式统一
+)
+
+# 9.1 筛选可靠样本（P<0.05），剔除无关统计量（修正：用`P-value`匹配原始字段名）
+cibersort_clean <- cibersort_result %>%
+  as.data.frame() %>%
+  rownames_to_column("sample") %>%  # 行名转为样本名列，用于后续匹配
+  filter(`P-value` < 0.05) %>%  # 关键修正：用反引号包裹`P-value`，匹配原始字段名
+  dplyr::select(-c(Correlation, RMSE))  # 剔除无需后续分析的匹配度与误差统计量
+
+
+# 10. 样本ID精准匹配，构建最终预后分析数据集
+# 10.1 提取CIBERSORT可靠样本与生存数据的共有样本ID（确保数据对应）
+common_samples_final <- intersect(cibersort_clean$sample, surv_data_clean$sample)
+
+# 10.2 筛选并排序数据，保证两组数据的样本顺序完全一致（避免后续合并错位）
+cibersort_final <- cibersort_clean %>%
+  filter(sample %in% common_samples_final) %>%
+  arrange(match(sample, common_samples_final))
+
+surv_data_final <- surv_data_clean %>%
+  filter(sample %in% common_samples_final) %>%
+  arrange(match(sample, common_samples_final))
+
+# 10.3 合并数据集，整合B细胞亚型浸润分数与生存信息（核心步骤）
+prognosis_data <- merge(cibersort_final, surv_data_final, by = "sample")
+
+# 10.4 验证最终数据集的完整性与格式（确保无异常，可用于后续预后分析）
+cat("最终预后分析数据集样本数：", nrow(prognosis_data), "\n")
+cat("最终数据集包含字段：", paste(colnames(prognosis_data), collapse = ", "), "\n")
+head(prognosis_data[, 1:8])  # 预览前8列数据，确认样本、亚型分数、生存字段对应正常
+
+# 10.5 保存最终数据集（RDS格式保留R数据结构，读取效率更高，避免重复步骤）
+output_path_prognosis <- file.path("D:", "document", "code", "DHX9", "result", "03_Prognosis")
+dir.create(output_path_prognosis, showWarnings = FALSE, recursive = TRUE)
+saveRDS(
+  prognosis_data,
+  file.path(output_path_prognosis, "prognosis_data.rds")
+)
+cat("最终预后数据集已保存至：", file.path(output_path_prognosis, "prognosis_data.rds"), "\n")
+
+### 生存曲线
+# 1. 加载最终预后数据集
+prognosis_data <- readRDS(file.path("D:", "document", "code", "DHX9", "result", "03_Prognosis", "prognosis_data.rds"))
+
+# 2. 选择目标亚型（优先选择有非零分布的亚型，如Plasma.cells_DHX9_high）
+target_subtype <- "Plasma.cells_DHX9_high"
+
+# 3. 按亚型浸润分数中位数分组（高浸润组 vs 低浸润组）
+prognosis_data$group <- ifelse(
+  prognosis_data[[target_subtype]] >= median(prognosis_data[[target_subtype]]),
+  "High_Infiltration",
+  "Low_Infiltration"
+)
+
+# 4. 构建Kaplan-Meier生存模型
+km_model <- survfit(Surv(OS.time, OS) ~ group, data = prognosis_data)
+
+# 5. 绘制并美化K-M生存曲线
+ggsurvplot(
+  km_model,
+  data = prognosis_data,
+  title = paste("Kaplan-Meier Curve of", target_subtype, "Infiltration"),
+  xlab = "Time (days)",
+  ylab = "Overall Survival Probability",
+  legend = "bottom",
+  legend.labs = c("Low Infiltration", "High Infiltration"),
+  pval = TRUE,  # 显示对数秩检验P值，判断组间差异
+  conf.int = TRUE,  # 显示生存概率95%置信区间
+  risk.table = TRUE,  # 显示风险表，展示不同时间点样本存活数
+  risk.table.col = "strata",
+  risk.table.height = 0.2,
+  palette = c("#2E9FDF", "#E74C3C"),
+  ggtheme = theme_pubr()
+)
+
+# 6. 保存K-M曲线（PDF格式，高清可用于后续展示）
+output_path_prognosis <- file.path("D:", "document", "code", "DHX9", "result", "03_Prognosis")
+ggsave(
+  file.path(output_path_prognosis, paste0("KM_Curve_", target_subtype, ".pdf")),
+  width = 10,
+  height = 8,
+  dpi = 300
+)
+
+cat("Kaplan-Meier生存曲线已保存至：", output_path_prognosis, "\n")
+
+
+
+
+# ======================================
+# 全体B细胞生存曲线绘制（独立可运行版，兼容低版本survminer）
+# ======================================
+# 1. 加载必需的R包
+if (!require("survival")) install.packages("survival")
+if (!require("survminer")) install.packages("survminer")
+if (!require("tidyverse")) install.packages("tidyverse")
+
+library(survival)
+library(survminer)
+library(tidyverse)
+
+# 2. 加载最终预后数据集（替换为你的文件路径，确保路径正确）
+prognosis_data <- readRDS(file.path("D:", "document", "code", "DHX9", "result", "03_Prognosis", "prognosis_data.rds"))
+
+# 3. 筛选所有B细胞相关亚型列（自动识别，无需手动修改）
+b_cell_columns <- colnames(prognosis_data)[grepl("B\\.cells|Plasma\\.cells", colnames(prognosis_data))]
+cat("识别到的B细胞亚型列：", paste(b_cell_columns, collapse = ", "), "\n\n")
+
+# 4. 计算全体B细胞总浸润分数（行求和，生成新列）
+prognosis_data$Total.B.cells <- rowSums(prognosis_data[, b_cell_columns], na.rm = TRUE)
+
+# 5. 按全体B细胞浸润分数中位数分组（高/低浸润组）
+prognosis_data$Total.B.cell.group <- ifelse(
+  prognosis_data$Total.B.cells >= median(prognosis_data$Total.B.cells),
+  "High_B_Cell_Infiltration",
+  "Low_B_Cell_Infiltration"
+)
+
+# 6. 构建Kaplan-Meier生存模型
+km_model_total_b <- survfit(
+  Surv(OS.time, OS) ~ Total.B.cell.group,  # 生存公式：时间+结局 ~ 分组
+  data = prognosis_data
+)
+
+# 7. 绘制并美化全体B细胞生存曲线
+p_total_b <- ggsurvplot(
+  km_model_total_b,
+  data = prognosis_data,
+  title = "Kaplan-Meier Curve of Total B Cell Infiltration",
+  xlab = "Time (days)",
+  ylab = "Overall Survival Probability",
+  legend = "bottom",
+  legend.labs = c("Low B Cell Infiltration", "High B Cell Infiltration"),
+  pval = TRUE,  # 显示对数秩检验P值
+  conf.int = TRUE,  # 显示95%置信区间
+  risk.table = TRUE,  # 显示风险表（存活数变化）
+  risk.table.col = "strata",
+  risk.table.height = 0.2,
+  palette = c("#2E9FDF", "#E74C3C"),  # 配色方案
+  ggtheme = theme_pubr()  # 美化主题
+)
+
+# 8. 先打开PDF绘图设备，再输出曲线，最后关闭设备（完整保存所有元素）
+output_path_prognosis <- file.path("D:", "document", "code", "DHX9", "result", "03_Prognosis")
+pdf(
+  file = file.path(output_path_prognosis, "KM_Curve_Total_B_Cells_Independent.pdf"),
+  width = 10,
+  height = 8,
+  pointsize = 12
+)
+print(p_total_b)
+dev.off()  # 关闭PDF设备，完成保存
+
+# 9. 显示生存曲线（在R绘图窗口中展示）
+print(p_total_b)
+
+# 10. 输出完成提示
+cat("\n===== 分析完成 =====\n")
+cat("全体B细胞生存曲线已保存至：", output_path_prognosis, "\n")
+cat("文件名：", file.path(output_path_prognosis, "KM_Curve_Total_B_Cells_Independent.pdf"), "\n")
+
+
+
+library(survival)
+library(survminer)
+library(tidyverse)
+best_cutoff <- 0.55
+
+# 步骤4.3 按阈值分组（两组样本量可能不一致，符合真实数据分布）
+prognosis_data$High.DHX9.B.Cells.Group <- ifelse(
+  prognosis_data$High.DHX9.B.Cells.Total >= best_cutoff,
+  "High_DHX9_B_Cells_High_Infiltration",  # 高浸润组（高DHX9 B细胞占比高）
+  "High_DHX9_B_Cells_Low_Infiltration"   # 低浸润组（高DHX9 B细胞占比低）
+)
+
+# 4.4 查看分组后样本量分布（验证非等分特性，与中位数等分的核心区别）
+cat("\n===== 分组后样本量分布（非等分，反映真实差异） =====\n")
+group_distribution <- table(prognosis_data$High.DHX9.B.Cells.Group)
+print(group_distribution)
+cat("两组样本量占比：\n")
+print(prop.table(group_distribution) * 100)
+
+# 5. 构建Kaplan-Meier生存模型（基于非等分分组结果）
+km_model_high_dhx9 <- survfit(
+  Surv(OS.time, OS) ~ High.DHX9.B.Cells.Group,
+  data = prognosis_data
+)
+
+# 6. 绘制并美化生存曲线（保持与你现有代码的格式一致，兼容低版本survminer）
+p_high_dhx9 <- ggsurvplot(
+  km_model_high_dhx9,
+  data = prognosis_data,
+  title = "Kaplan-Meier Curve of High DHX9 B Cell Total Infiltration",
+  xlab = "Time (days)",
+  ylab = "Overall Survival Probability",
+  legend = "bottom",
+  legend.labs = c("Low Infiltration (High DHX9 B Cells)", "High Infiltration (High DHX9 B Cells)"),
+  pval = TRUE,  # 显示对数秩检验P值
+  conf.int = TRUE,  # 显示95%置信区间
+  risk.table = TRUE,  # 显示风险表
+  risk.table.col = "strata",
+  risk.table.height = 0.2,
+  palette = c("#2E9FDF", "#E74C3C"),  # 保持与你现有代码一致的配色
+  ggtheme = theme_pubr()  # 美化主题
+)
+
+# 7. 保存生存曲线（兼容低版本survminer，使用PDF设备完整保存所有元素）
+output_path_prognosis <- file.path("D:", "document", "code", "DHX9", "result", "03_Prognosis")
+pdf(
+  file = file.path(output_path_prognosis, "KM_Curve_High_DHX9_B_Cells_OptimalCut.pdf"),
+  width = 10,
+  height = 8,
+  pointsize = 12
+)
+print(p_high_dhx9)
+dev.off()  # 关闭PDF设备，完成保存
+
+# 8. 显示生存曲线（在R绘图窗口中展示结果）
+print(p_high_dhx9)
+
+# 9. 输出完成提示
+cat("\n===== 分析完成 =====\n")
+cat("高DHX9 B细胞生存曲线（非等分分组）已保存至：", output_path_prognosis, "\n")
+cat("文件名：", file.path(output_path_prognosis, "KM_Curve_High_DHX9_B_Cells_OptimalCut.pdf"), "\n")
+
+# 10. 可选：验证分组效果（高DHX9 B细胞比例在两组中的分布差异）
+cat("\n===== 分组效果验证：高DHX9 B细胞比例在两组中的中位数 =====\n")
+prognosis_data %>%
+  group_by(High.DHX9.B.Cells.Group) %>%
+  summarise(
+    Median_Infiltration = median(High.DHX9.B.Cells.Total, na.rm = TRUE),
+    Mean_Infiltration = mean(High.DHX9.B.Cells.Total, na.rm = TRUE)
+  ) %>%
+  print()
+

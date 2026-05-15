@@ -1,0 +1,64 @@
+library(Seurat)
+library(SCP)
+rds<- readRDS("spleen_T_seurat.rds")
+Seu_obj <- FindNeighbors(rds,reduction="harmony", dims = 1:30)
+Seu_obj<- FindClusters(Seu_obj,resolution = 1)
+rds<-Seu_obj
+markers <- FindAllMarkers(object = rds,
+                               only.pos = FALSE,
+                               min.pct = 0.25,
+                               logfc.threshold = 0.585)
+write.csv(markers,"marker_t.csv")
+pdf("tcellspleen_clust_umap_1.pdf",width=11,height=8,onefile=F)
+CellDimPlot(
+  srt=rds,group.by=c("seurat_clusters"),label=T,
+  reduction="UMAP",theme_use="theme_scp",
+palette="Accent",
+label.bg="black",label_insitu=T,label.size=4.2
+)+theme_test()+theme(legend.text=element_text(size=12),legend.key.size=unit(0.6,'cm'),
+axis.text=element_text(size=11,color="black"))
+dev.off()
+rds$cell_type<- ifelse(rds$seurat_clusters==2,"Effector CD8+ TC",rds$cell_type)
+pdf("tcellspleen_umap_celltype.pdf",width=8,height=4.5,onefile=F)
+CellDimPlot(
+  srt=rds,group.by=c("cell_type"),label=T,
+  reduction="UMAP",theme_use="theme_scp",
+palette="Accent",
+label.bg="black",label_insitu=T,label.size=4.2
+)+theme_test()+theme(legend.text=element_text(size=12),legend.key.size=unit(0.6,'cm'),
+axis.text=element_text(size=11,color="black"))
+dev.off()
+
+genes_to_check = c("Lgals1", "S100a4", "Itgb1",
+"Foxp3","Ctla4",
+"Klrk1","Klrc1",
+"Ly6c1","Igfbp4","Ccr7","Selenop",
+"Ly6c2","Il2rb","Nkg7","Gzmm",
+ "Cd40lg","Icos","Il4")
+pdf("tcellspleen_celltype_dot.pdf",width=6.5,height=5.5,onefile=F)
+ht<-GroupHeatmap(
+  srt=rds,
+  features=genes_to_check,
+  group.by=c("cell_type"),
+  heatmap_palette="YlOrRd",
+  show_row_names=F,row_names_side="left",
+  add_dot=TRUE,add_reticle=TRUE
+)
+print(ht$plot)
+dev.off()
+rds<- rds[,rds$group=="tumor"]
+rds$group<- ifelse(rds$orig.ident=="T-wt","WT","KO")
+count<- as.data.frame(table(rds$cell_type,rds$group))
+count2<- as.data.frame(table(rds$group))
+count<- merge(count,count2,by.x="Var2",by.y="Var1")
+count$percent<- count$Freq.x/count$Freq.y
+count$Var2<- factor(count$Var2,levels=c("WT","KO"))
+p1<- ggplot(count,aes(x=Var2,y=Var1,color=percent,size=percent))+
+geom_point()+
+scale_color_gradientn(colors=hcl.colors(5,"Viridis"))+
+labs(x="",y="")+
+theme_bw()+
+theme(axis.text=element_text(color="black"))
+ggsave("spleen_percent_group.pdf",plot=p1,width=4.6,height=3.5)
+
+

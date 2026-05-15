@@ -1,0 +1,177 @@
+
+# ====================== 步骤1：环境配置与包加载 ======================
+required_packages <- c("Seurat", "Matrix", "dplyr", "data.table", "stringr", 
+                       "ggplot2", "patchwork", "harmony", "ggpubr", "effsize")
+new_packages <- required_packages[!(required_packages %in% installed.packages()[,"Package"])]
+if (length(new_packages) > 0) {
+  install.packages(new_packages, dependencies = TRUE, repos = "https://mirrors.tuna.tsinghua.edu.cn/CRAN/")
+}
+library(Seurat)
+library(Matrix)
+library(dplyr)
+library(tidyr)
+library(data.table)
+library(stringr)
+library(ggplot2)
+library(patchwork)
+library(harmony)
+library(ggpubr)
+library(effsize)
+# 设置核心路径（适配你新的data/infiltration目录）
+setwd("D:/document/code/DHX9")
+data_path <- "./data/infiltration"  # 所有原始数据的统一路径
+output_path <- "./result/05_Infiltration_Global"  # 新输出路径
+# RDS文件路径（已注释的Seurat对象）
+rds_path <- "./data/03_seurat_object_annotated.rds"
+dir.create(output_path, recursive = TRUE, showWarnings = FALSE)
+
+# 创建子目录结构
+dir.create(output_path, recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(output_path, "01_Correlation"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(output_path, "02_CD8T_DEG"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(output_path, "03_CD8T_KEGG"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(output_path, "04_CD8T_GSEA"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(output_path, "05_Bcell_DEG"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(output_path, "06_Bcell_KEGG"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(output_path, "07_Bcell_GSEA"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(output_path, "08_Granzyme_Violin"), showWarnings = FALSE, recursive = TRUE)
+
+
+# ====================== 步骤2：从RDS加载已注释的Seurat对象 ======================
+cat("步骤2：加载已注释的Seurat对象...\n")
+all_seu_harmony <- readRDS(rds_path)
+cat("   Seurat对象加载完成，总细胞数 =", ncol(all_seu_harmony), "\n")
+
+# === 2.1 提取B细胞 ===
+b_cell_seu <- subset(all_seu_harmony, subset = cell_type == "B细胞")
+dhx9_b_cell <- FetchData(b_cell_seu, vars = c("DHX9", "GSM_ID"))
+
+# 第一步：计算样本级DHX9表达 + CD8+T浸润比例（保留基础R逻辑，仅简化阈值部分）
+# 1. 样本级B细胞DHX9平均表达
+dhx9_b_cell_df <- as.data.frame(dhx9_b_cell)  
+sample_dhx9_mean <- aggregate(
+  DHX9 ~ GSM_ID, 
+  data = dhx9_b_cell_df,
+  FUN = function(x) c(mean = mean(x), count = length(x))  
+)
+sample_dhx9_mean <- data.frame(
+  GSM_ID = sample_dhx9_mean$GSM_ID,
+  DHX9_mean = sample_dhx9_mean$DHX9[, "mean"],
+  B_cell_count = sample_dhx9_mean$DHX9[, "count"],
+  stringsAsFactors = FALSE
+)
+
+# 2. 同步计算样本级CD8+T细胞浸润比例（保留原逻辑）
+meta_df <- as.data.frame(all_seu_harmony@meta.data)  
+total_cell <- aggregate(
+  cell_type ~ GSM_ID, 
+  data = meta_df,
+  FUN = length
+)
+colnames(total_cell)[2] <- "Total_cell_count"
+cd8t_cell <- aggregate(
+  cell_type ~ GSM_ID, 
+  data = meta_df[meta_df$cell_type == "CD8+ T细胞", ],  
+  FUN = length
+)
+colnames(cd8t_cell)[2] <- "CD8T_cell_count"
+sample_cell_stats <- merge(total_cell, cd8t_cell, by = "GSM_ID", all.x = TRUE)
+sample_cell_stats$CD8T_cell_count[is.na(sample_cell_stats$CD8T_cell_count)] <- 0  
+sample_cell_stats$CD8T_infiltration <- sample_cell_stats$CD8T_cell_count / sample_cell_stats$Total_cell_count
+
+# 3. 合并数据（保留原逻辑）
+dhx9_cd8_df <- merge(
+  sample_dhx9_mean,
+  sample_cell_stats,
+  by = "GSM_ID",
+  all.x = TRUE
+)
+dhx9_cd8_df <- dhx9_cd8_df[!is.na(dhx9_cd8_df$CD8T_infiltration), ]  
+rownames(dhx9_cd8_df) <- NULL  
+optimal_cutoff <- 0.7
+cat("  使用硬编码DHX9分组阈值：", optimal_cutoff, "\n")
+
+# 按固定阈值分组
+sample_dhx9_mean$DHX9_group <- ifelse(
+  sample_dhx9_mean$DHX9_mean >= optimal_cutoff, 
+  "High", 
+  "Low"
+)
+# 重置因子水平
+sample_dhx9_mean$DHX9_group <- factor(sample_dhx9_mean$DHX9_group, levels = c("Low", "High"))
+
+# 输出硬编码阈值的分组结果
+cat("DHX9分组阈值（硬编码）：\n")
+cat("  固定阈值数值：", round(optimal_cutoff, 4), "\n")
+cat("  分组样本量：\n")
+print(table(sample_dhx9_mean$DHX9_group))
+cat("  低表达组阈值（<）：", round(optimal_cutoff, 4), "\n")
+cat("  高表达组阈值（≥）：", round(optimal_cutoff, 4), "\n")
+
+# 2.2 计算样本级CD8+T细胞浸润比例
+sample_cell_stats <- all_seu_harmony@meta.data %>%
+  group_by(GSM_ID) %>%
+  summarise(
+    Total_cell_count = n(),
+    CD8T_cell_count = sum(cell_type == "CD8+ T细胞"),
+    .groups = "drop"
+  ) %>%
+  mutate(CD8T_infiltration = CD8T_cell_count / Total_cell_count)
+
+# 2.3 合并数据并过滤有效样本
+analysis_df <- merge(
+  sample_dhx9_mean,
+  sample_cell_stats,
+  by = "GSM_ID",
+  all.x = TRUE
+) %>%
+  filter(!is.na(CD8T_infiltration))
+
+# 后续统计检验、可视化、结果保存等代码均无需修改...
+# 2.4 统计检验（仅整体，无分组）
+stat_test <- wilcox.test(CD8T_infiltration ~ DHX9_group, data = analysis_df)
+eff_size <- cohen.d(CD8T_infiltration ~ DHX9_group, data = analysis_df)
+
+# 输出统计结果
+cat("\n=== 整体分析统计结果 ===\n")
+cat("DHX9高表达组CD8+T浸润比例均值：", round(mean(analysis_df$CD8T_infiltration[analysis_df$DHX9_group=="High"]), 4), "\n")
+cat("DHX9低表达组CD8+T浸润比例均值：", round(mean(analysis_df$CD8T_infiltration[analysis_df$DHX9_group=="Low"]), 4), "\n")
+cat("Wilcoxon p值：", round(stat_test$p.value, 4), "\n")
+cat("Cohen's d效应量：", round(eff_size$estimate, 2), "\n")
+
+# 2.5 可视化（仅整体箱线图，无分面）
+p <- ggboxplot(
+  analysis_df,
+  x = "DHX9_group",
+  y = "CD8T_infiltration",
+  fill = "DHX9_group",
+  palette = c("#2E86AB", "#E63946"),
+  xlab = "B细胞DHX9表达水平",
+  ylab = "CD8+T细胞浸润比例",
+  title = "B细胞DHX9表达与CD8+T细胞浸润的整体关联",
+  add = "jitter",
+  add.params = list(size = 1, alpha = 0.6)
+) +
+  stat_compare_means(method = "wilcox.test", label = "p.format") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5), legend.position = "none")
+
+# 保存图表和结果（输出到新路径）
+ggsave(file.path(output_path,"01_Correlation", "DHX9_CD8T_infiltration_global.pdf"), p, width = 8, height = 6)
+write.csv(analysis_df, file.path(output_path,"01_Correlation", "DHX9_CD8T_infiltration_global.csv"), row.names = FALSE)
+
+stat_results <- list(
+  wilcox_test = stat_test,
+  cohen_d = eff_size,
+  dhx9_cutoff = median(sample_dhx9_mean$DHX9_mean),
+  group_mean = tapply(analysis_df$CD8T_infiltration, analysis_df$DHX9_group, mean)
+)
+saveRDS(stat_results, file.path(output_path,"01_Correlation", "DHX9_CD8T_stat_results_global.rds"))
+
+cat("\n 整体分析完成！所有结果已保存至：", output_path, "\n")
+
+
+
+
+
+

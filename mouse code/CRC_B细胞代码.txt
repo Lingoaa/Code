@@ -1,0 +1,117 @@
+library(Seurat)
+library(ggplot2)
+library(harmony)
+library(SCP)
+rds<- readRDS("bc_seurat_harmony.rds")
+
+exp <- readRDS("BC5_exp.rds")
+meta <- read.csv("BC5_meta.csv", row.names = 1)
+##初始化Seurat对象
+bc <- CreateSeuratObject(counts =exp , project = "b_cell", min.cells = 3) %>%
+  Seurat::NormalizeData(verbose = FALSE) %>%
+  FindVariableFeatures(selection.method = "vst", nfeatures = 2000) %>%
+  ScaleData(verbose = FALSE) %>%
+  RunPCA(pc.genes = bc@var.genes, npcs = 20, verbose = FALSE)
+orig.ident <- meta$orig.ident
+names(orig.ident) <- colnames(x = bc)
+bc <- AddMetaData(
+  object = bc,
+  metadata = orig.ident,
+  col.name = "orig.ident"
+)
+table(bc@meta.data$orig.ident)
+
+#样本信息
+group <- meta$group
+names(group) <- colnames(x = bc)
+bc <- AddMetaData(
+  object = bc,
+  metadata = group,
+  col.name = "group"
+)
+table(bc@meta.data$group)
+bc <- bc %>%
+  RunHarmony("orig.ident", plot_convergence = TRUE)
+bc <- FindNeighbors(bc, reduction = "harmony", dims = 1:20) %>% FindClusters(resolution = 0.2)
+bc <- RunUMAP(bc, reduction = "harmony", dims = 1:20)
+new.cluster.ids <- c("0" = "Follicular BC",
+                     "1" = "Plasm cells",
+                     "2" = "Follicular BC",
+                     "3" = "Follicular BC",
+                     "4" = "GC BC",
+                     "5" = "Plasm cells",
+                     "6" = "Follicular BC")
+
+names(new.cluster.ids) <- levels(bc)
+bc <- RenameIdents(bc, new.cluster.ids)
+ident <- data.frame(bc@active.ident)
+bc@meta.data$cell_type <- ident$bc.active.ident
+saveRDS(bc, file = "5bc_seurat.rds")
+rds<-readRDS("5bc_seurat.rds")
+
+pdf("bcellcrc_umap_1.pdf",width=6,height=4.5,onefile=F)
+CellDimPlot(
+  srt=rds,group.by=c("cell_type"),label=T,
+  reduction="UMAP",theme_use="theme_scp",
+palette="Set1",
+label.bg="black",label_insitu=T,label.size=4.2
+)+theme_test()+theme(legend.text=element_text(size=9),legend.key.size=unit(0.6,'cm'),
+axis.text=element_text(size=11,color="black"))
+dev.off()
+
+rds$orig.ident<- gsub("wt","WT",rds$orig.ident)
+rds$orig.ident<- gsub("ko","KO",rds$orig.ident)
+pdf("bcellcrc_sample_celltype_percent.pdf",width=4.1,height=3)
+CellStatPlot(rds, stat.by = "cell_type", group.by = "orig.ident", palette="Set1")+theme(legend.text=element_text(size=11),legend.spacing.y = unit(9, "cm"))
+dev.off()
+genes_to_check = c("Ccr7","Cd79a","Ebf1","Bank1",
+                   "Jchain","Igha","Igkc","Iglv1",
+                   "Nrg2","Creb3l2","Basp1","Cpeb3")
+ht<-GroupHeatmap(
+  srt=rds,
+  features=genes_to_check,
+  group.by=c("cell_type"),
+  heatmap_palette="YlOrRd",
+  show_row_names=F,row_names_side="left",
+  add_dot=TRUE,add_reticle=TRUE,label_size = 13
+)
+pdf("bcellcrc_celltype_dot.pdf",width=5.5,height=4.5)
+print(ht$plot)
+dev.off()
+
+pdf("bcellcrc_umap_marker.pdf",width=3.5,height=3)
+FeatureDimPlot(
+  srt =rds, features = c("Cd79a"),
+  reduction = "UMAP", theme_use = "theme_scp"
+)+theme_test()+theme(legend.text=element_text(size=9),
+axis.text=element_text(size=11,color="black"))
+dev.off()
+rds$group<- ifelse(rds$group=="CKO","T-KO","WT")
+rds <- RunDEtest(srt = rds, group_by = "group", fc.threshold = 1, only.pos = FALSE)
+pdf("bcellcrc_group_volcano.pdf",width=8.5,height=4,onefile=F)
+VolcanoPlot(srt = rds, group_by = "group",label.size = 6.5)
+dev.off()
+
+rds2<- rds[,rds$cell_type=="Follicular BC"]
+rds2$group<- ifelse(rds2$group=="CKO","T-KO","WT")
+rds2 <- RunDEtest(srt = rds2, group_by = "group", fc.threshold = 1, only.pos = FALSE)
+rds2 <- RunEnrichment(
+  srt = rds2, group_by = "group", db = "GO_BP", species = "Mus_musculus",
+  DE_threshold = "avg_log2FC > log2(1) & p_val < 0.05"
+)
+path<- rds2@tools$Enrichment_group_wilcox$results$`T-KO-GO_BP`@result
+path$Description[grep("T cell",path$Description)]
+path$Description[grep("apoptotic",path$Description)]
+pdf("FBCcrc_CKO_pathway.pdf",width=11,height=9,onefile=F)
+EnrichmentPlot(
+  srt = rds2, group_by = "group", group_use = "T-KO",
+  plot_type = "network",id_use=path$ID[c(67,112,538,364,69,432,1684)]
+)+theme(legend.text=element_text(size=11),legend.key.size=unit(1.2,'cm'))
+dev.off()
+
+rds2$group<- ifelse(rds2$group=="T-KO","KO","WT")
+rds2$group<- factor(rds2$group,levels=c("WT","KO"))
+pdf("gene_compare.pdf",width=8.5,height=3)
+FeatureStatPlot(rds2, stat.by = c("Cxcl13", "Dcn","Mrc1"), group.by = "group",comparisons =list(c("KO","WT")),split.by="group",palette="Set2",sig_labelsize = 5.5)+
+theme(axis.text=element_text(size=11))
+dev.off()
