@@ -2,7 +2,7 @@ setwd("E:/AOM_tumor/filter_data/B_cell")
 rm(list=ls())
 
 
-##加载R包
+##Load R packages
 {
   library(densityClust)
   library(scran)
@@ -31,13 +31,13 @@ rm(list=ls())
 
 set.seed(123)  
 
-##导入数据
+##Import data
 exp <- readRDS("BC5_exp.rds")
 
 meta <- read.csv("BC5_meta.csv", row.names = 1)
 
 
-##初始化Seurat对象
+##Initialize Seurat object
 bc <- CreateSeuratObject(counts =exp , project = "b_cell", min.cells = 3) %>%
   Seurat::NormalizeData(verbose = FALSE) %>%
   FindVariableFeatures(selection.method = "vst", nfeatures = 2000) %>%
@@ -45,8 +45,8 @@ bc <- CreateSeuratObject(counts =exp , project = "b_cell", min.cells = 3) %>%
   RunPCA(pc.genes = bc@var.genes, npcs = 20, verbose = FALSE)
 
 
-##添加分组信息
-#分组信息
+##Add group information
+#Group information
 orig.ident <- meta$orig.ident
 names(orig.ident) <- colnames(x = bc)
 bc <- AddMetaData(
@@ -56,7 +56,7 @@ bc <- AddMetaData(
 )
 table(bc@meta.data$orig.ident)
 
-#样本信息
+#Sample information
 group <- meta$group
 names(group) <- colnames(x = bc)
 bc <- AddMetaData(
@@ -99,7 +99,7 @@ bc <- RunUMAP(bc, reduction = "harmony", dims = 1:20)
 
 DimPlot(bc, reduction = "umap",label = T,pt.size = 0.5) 
 
-##找高变基因
+##Find highly variable genes
 markers <- FindAllMarkers(object = bc, test.use="wilcox" ,
                           only.pos = TRUE,
                           logfc.threshold = 0.25)   
@@ -134,7 +134,7 @@ new.cluster.ids <- c("0" = "Follicular BC",
 names(new.cluster.ids) <- levels(bc)
 bc <- RenameIdents(bc, new.cluster.ids)
 
-#查看细胞数
+#Check cell counts
 table(bc@meta.data$orig.ident,bc@active.ident)
 
 ident <- data.frame(bc@active.ident)
@@ -150,8 +150,8 @@ write.csv(bc@meta.data, "bc_meta.csv")
 
 saveRDS(bc, file = "5bc_seurat.rds")
 
-##ggplot绘图
-##提取前两个主成分数据
+##ggplot plotting
+##Extract the first two principal component coordinates
 # extact PC ranges
 pc12 <- Embeddings(object = bc,reduction = 'umap') %>%
   data.frame()
@@ -159,7 +159,7 @@ pc12 <- Embeddings(object = bc,reduction = 'umap') %>%
 # check
 head(pc12,3)
 
-##构造坐标轴需要的标签和位置信息
+##Build labels and positions needed for coordinate axes
 # get botomn-left coord
 lower <- floor(min(min(pc12$UMAP_1),min(pc12$UMAP_2))) - 2
 
@@ -178,7 +178,7 @@ axes <- data.frame(x = c(lower,lower,lower,linelen),y = c(lower,linelen,lower,lo
 label <- data.frame(lab = c('UMAP_2','UMAP_1'),angle = c(90,0),
                     x = c(lower - 3,mid),y = c(mid,lower - 2.5))
 
-##可视化
+##Visualization
 # plot
 color <- c("#f39c90","#A9D179","#CC79A7")
 
@@ -208,7 +208,7 @@ plot2
 ggsave('bc_celltype_group.png',plot1,width = 10,height = 10)
 
 
-##热图marker可视化
+##Heatmap marker visualization
 ##DotPlot
 genes_to_check = c("Ccr7","Cd79a","Ebf1","Bank1",
                    "Jchain","Igha","Igkc","Iglv1",
@@ -220,7 +220,7 @@ p
 ggsave("marker_dotplot.png", p, width=7,height=7)
 
 
-##小提琴图
+##Violin plot
 
 genes_to_check = c("Ccr7","Cd79a","Ebf1","Bank1",
                    "Jchain","Igha","Igkc","Iglv1",
@@ -240,7 +240,7 @@ ggsave("marker_FeaturePlot.png", p1, width=12,height=8)
 
 
 
-##提取Fob
+##extract Fob
 table(bc@meta.data$cell_type)
 
 Fob <- subset(x=bc, idents =c("Follicular BC"))

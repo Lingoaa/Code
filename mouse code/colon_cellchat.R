@@ -2,7 +2,7 @@ rm(list=ls())
 setwd("E:/AOM_tumor/filter_data/cellchat")
 
 
-##加载R包
+##Load R packages
 {
   library(CellChat)
   library(Seurat)
@@ -11,8 +11,8 @@ setwd("E:/AOM_tumor/filter_data/cellchat")
   library(openxlsx)
 }
 
-# Part1 数据输入和处理以及CellChat对象的初始化
-## 导入数据
+# Part1 data CellChat object initialize
+## Import data
 imm <- readRDS("colon_imm_seurat.rds")
 
 bc <- readRDS("5bc_seurat.rds")
@@ -22,7 +22,7 @@ tc <- readRDS("TC5_seurat.rds")
 
 rm(NT_BT)
 
-#合并数据
+#merge data
 all <- merge(imm, y = c(bc, tc), add.cell.ids = c("4K", "8K"), project = "PBMC12K",merge.data = TRUE)
 
 table(NT_BT$orig.ident)
@@ -32,18 +32,18 @@ table(NT_BT$cell_type)
 
 saveRDS(NT_BT, file = "NT_BT_seurat.rds")
 
-#提取normal
+#Extract normal samples
 N_BT <- subset(x = NT_BT, subset = group == "normal")
 
 saveRDS(N_BT, file = "N_BT_seurat.rds")
 
-#提取tumor
+#Extract tumor samples
 T_BT <- subset(x = NT_BT, subset = group == "tumor")
 
 saveRDS(T_BT, file = "T_BT_seurat.rds")
 
 
-####重新导入数据分析
+####Import data analysis
 rm(list=ls())
 setwd("E:/spleen_alldata/cellchat/tumor_BT")
 
@@ -52,7 +52,7 @@ T_BT
 table(T_BT$orig.ident)
 table(T_BT$cell_type)
 
-#分析wt
+#analysis wt
 tb_ko <- T_BT[,T_BT@meta.data[["orig.ident"]]=='T-ko']
 exp <- tb_ko@assays$RNA@data
 meta <- tb_ko@meta.data
@@ -61,12 +61,12 @@ index1 <- which(colnames(exp) %in% rownames(meta))
 data.input <- exp[,index1]
 dim(data.input)
 
-## 创建CellChat对象
+## create CellChat object
 cellchat <- createCellChat(object = data.input,
                            meta = meta,
                            group.by = "cell_type")
 
-## 导入配体受体相互作用数据库
+## import data
 CellChatDB <- CellChatDB.mouse  #CellChatDB.human,CellChatDB.mouse
 showDatabaseCategory(CellChatDB)
 dplyr::glimpse(CellChatDB$interaction)# Show the structure of the database
@@ -74,27 +74,27 @@ dplyr::glimpse(CellChatDB$interaction)# Show the structure of the database
 #CellChatDB.use <- subsetDB(CellChatDB, search = "Secreted Signaling") # use Secreted Signaling
 cellchat@DB <- CellChatDB
 
-## 数据预处理
+## data preprocessing
 cellchat <- subsetData(cellchat)# subset the expression data of signaling genes for saving computation cost
 #future::plan("multisession", workers = 4)
 cellchat <- identifyOverExpressedGenes(cellchat)
 cellchat <- identifyOverExpressedInteractions(cellchat)
 cellchat <- projectData(cellchat, PPI.human)# project gene expression data onto PPI network (optional)
-#推测的每个配体-受体对的细胞间通信网络和每个信号通路分别存储在“net”和“netP”槽中。
+#- between cells pathways stored in "net" "netP".
 
-# Part2 细胞间通讯网络推断
-## 计算通讯概率并推断网络
+# Part2 between cells
+## calculate
 cellchat <- computeCommunProb(cellchat)
 cellchat <- filterCommunication(cellchat, min.cells = 10)
 
-## 提取推断得到的细胞通讯网络
+## extract
 df.net <- subsetCommunication(cellchat)
-#df.net <- subsetCommunication(all_cellchat, signaling = 'WNT')#netp返回通路级别数据/sources.use返回信号起点终点/signaling 返回特定信号通路
+#df.net <- subsetCommunication(all_cellchat, signaling = 'WNT')#netp pathways data /sources.use /signaling pathways
 
-## 在信号通路水平上推断细胞间通讯
+## pathways between cells
 cellchat <- computeCommunProbPathway(cellchat)
 
-## 计算整合网络
+## calculate integrate
 cellchat <- aggregateNet(cellchat)
 groupSize <- as.numeric(table(cellchat@idents))
 
@@ -106,7 +106,7 @@ for (i in 1:nrow(mat)) {
   netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, edge.weight.max = max(mat), title.name = rownames(mat)[i])
 }
 
-# 保存CellChat对象
+# save CellChat object
 cellchat@netP$pathways
 
 saveRDS(cellchat, file = "cellchat_T_BT_wt.rds")
@@ -114,18 +114,18 @@ saveRDS(cellchat, file = "cellchat_T_BT_wt.rds")
 rm(list=ls())
 
 
-## 导入数据
+## Import data
 cellchat_wt <- readRDS(file = "cellchat_T_BT_wt.rds")
 cellchat_ko <- readRDS(file = "cellchat_T_BT_ko.rds")
 
 
-#合并cellchat对象
+#merge cellchat object
 cco.list <- list(T_wt=cellchat_wt, T_ko=cellchat_ko)
 
 cellchat <- mergeCellChat(cco.list, add.names = names(cco.list), cell.prefix = TRUE)
 
 
-#所有细胞群总体观：通讯数量与强度对比
+#all cells: count
 gg1 <- compareInteractions(cellchat, show.legend = F, group = c(1,2), measure = "count")
 gg2 <- compareInteractions(cellchat, show.legend = F, group = c(1,2), measure = "weight")
 p <- gg1 + gg2
@@ -134,18 +134,18 @@ p
 ggsave("Overview_number_strength.png", p, width = 6, height = 4)
 
 
-#数量与强度差异网络图
+#count
 par(mfrow = c(1,2))
 netVisual_diffInteraction(cellchat, weight.scale = T)
 netVisual_diffInteraction(cellchat, weight.scale = T, measure = "weight")
 
-#数量与强度差异热图
+#count heatmap
 par(mfrow = c(1,1))
 h1 <- netVisual_heatmap(cellchat)
 h2 <- netVisual_heatmap(cellchat, measure = "weight")
 h1+h2
 
-#细胞互作数量对比网络图
+#count
 par(mfrow = c(1,2))
 weight.max <- getMaxWeight(cco.list, attribute = c("idents","count"))
 for (i in 1:length(cco.list)) {
@@ -155,8 +155,8 @@ for (i in 1:length(cco.list)) {
 }
 
 
-#保守和特异性信号通路的识别与可视化
-## 通路信号强度对比分析
+#specific pathways identify Visualization
+## pathways analysis
 gg1 <- rankNet(cellchat, mode = "comparison", stacked = T, do.stat = TRUE)
 gg2 <- rankNet(cellchat, mode = "comparison", stacked = F, do.stat = TRUE)
 p <- gg1 + gg2
@@ -164,13 +164,13 @@ p
 ggsave("Compare_pathway_strengh.png", p, width = 10, height = 6)
 
 
-#气泡图展示所有配体受体对的差异
+#display
 levels(cellchat@idents$joint)
 p <- netVisual_bubble(cellchat, sources.use = c(3), targets.use = c(1,2,3,4,5,6,7,8,9,10,11,12,13,14),  comparison = c(1, 2), angle.x = 45)
 p
 ggsave("Compare_bubble.png", p, width = 12, height = 8)
 
-#气泡图展示上调或下调的配体受体对
+#display upregulated downregulated
 p1 <- netVisual_bubble(cellchat, sources.use = c(3), targets.use = c(1,2,3,4,5,6,7,8,9,10,11,12,13,14), comparison = c(1, 2), 
                        max.dataset = 2, title.name = "Increased signaling in T_ko", angle.x = 45, remove.isolate = T)
 p2 <- netVisual_bubble(cellchat, sources.use = c(4,5), targets.use = c(1,2,3,6), comparison = c(1, 2), 
@@ -179,8 +179,8 @@ pc <- p1 + p2
 ggsave("Increased signaling in T_ko.png", p1, width = 12, height = 7)
 
 
-#####单通路展示
-## 查看重要通信的信号通路
+#####pathways display
+## inspect pathways
 cellchat_ko@netP$pathways
 cellchat_wt@netP$pathways
 
@@ -220,7 +220,7 @@ target <- c('Cd8+ NKT',
             'Tregs')
 
 
-## 挑选用于可视化的信号通路
+## Visualization pathways
 CD40 <- c("CD40")
 MHCI <- c("MHC-I")
 
@@ -235,7 +235,7 @@ TGFb <- c("TGFb")
 CD80 <- c("CD80")
 SEMA7 <- c("SEMA7")
 
-## 弦图
+## 
 #CD52
 netVisual_chord_gene(cellchat_ko, big.gap = 20,small.gap = 5,
                      targets.use = target,transparency = 0.5,
@@ -249,7 +249,7 @@ netVisual_chord_gene(cellchat_wt, big.gap = 20,small.gap = 5,
 
 
 
-## 热图
+## heatmap
 #CD52
 netVisual_heatmap(cellchat_ko, color.heatmap = 'Reds',color.use = color,
                   signaling = MHCI,targets.use = target,
@@ -264,7 +264,7 @@ p2
 
 ggsave("MHCI_wt_heatmap.pdf",p2,width = 12, height = 7)
 
-## 点图
+## 
 
 netVisual_bubble(cellchat_ko,
                  signaling = "MHC-I",targets.use =  target, 
@@ -353,7 +353,7 @@ netVisual_bubble(cellchat_wt,
 
 
 
-#导出prob数据用于标注在热图上
+#prob data label heatmap
 KO_MHCI <- cellchat_ko@netP[["prob"]][,,'MHC-I'] 
 WT_MHCI <- cellchat_wt@netP[["prob"]][,,'MHC-I'] 
 

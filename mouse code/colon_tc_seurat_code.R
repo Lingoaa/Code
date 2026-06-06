@@ -2,7 +2,7 @@ setwd("E:/AOM_tumor/filter_data/T_cell")
 rm(list=ls())
 
 
-##加载R包
+##Load R packages
 {
   library(densityClust)
   library(scran)
@@ -30,13 +30,13 @@ rm(list=ls())
 
 set.seed(123)  
 
-##导入数据
+##Import data
 exp <- readRDS("TC5_exp.rds")
 
 meta <- read.csv("TC5_meta.csv", row.names = 1)
 
 
-##初始化Seurat对象
+##Initialize Seurat object
 tc <- CreateSeuratObject(counts =exp , project = "T_cell", min.cells = 3, min.features = 200) %>%
   Seurat::NormalizeData(verbose = FALSE) %>%
   FindVariableFeatures(selection.method = "vst", nfeatures = 3000) %>%
@@ -44,8 +44,8 @@ tc <- CreateSeuratObject(counts =exp , project = "T_cell", min.cells = 3, min.fe
   RunPCA(pc.genes = tc@var.genes, npcs = 20, verbose = FALSE)
 
 
-##添加分组信息
-#分组信息
+##Add group information
+#Group information
 orig.ident <- meta$orig.ident
 names(orig.ident) <- colnames(x = tc)
 tc <- AddMetaData(
@@ -55,7 +55,7 @@ tc <- AddMetaData(
 )
 table(tc@meta.data$orig.ident)
 
-#样本信息
+#Sample information
 group <- meta$group
 names(group) <- colnames(x = tc)
 tc <- AddMetaData(
@@ -97,7 +97,7 @@ tc <- RunUMAP(tc, reduction = "harmony", dims = 1:20)
 
 DimPlot(tc, reduction = "umap",label = T,pt.size = 0.7) 
 
-##找高变基因
+##Find highly variable genes
 markers <- FindAllMarkers(object = tc, test.use="wilcox" ,
                           only.pos = TRUE,
                           logfc.threshold = 0.25)   
@@ -109,7 +109,7 @@ top30 = all.markers %>% group_by(cluster) %>% top_n(n = 30, wt = avg_log2FC)
 write.csv(top30, "5tc_markers.csv")
 
 
-##marker的可视化
+##marker Visualization
 genes_to_check = c("Il7r","Icos","Gzmk","Gzmb", #Memory T cells 0
                    "Chn2","Prkch","Bcl2", #Cd8+T_Bcl2 2/6/11
                    "Ms4a4b","Tcf7", "Cd69","Cd28","Cd44",#Cd4-Activated T 1
@@ -151,7 +151,7 @@ tc <- RenameIdents(tc, new.cluster.ids)
 
 table(tc@meta.data$orig.ident,tc@active.ident)
 
-#查看细胞数
+#Check cell counts
 table(tc@meta.data$orig.ident,tc@active.ident)
 
 ident <- data.frame(tc@active.ident)
@@ -163,7 +163,7 @@ tc@meta.data$cell_type <- ident$tc.active.ident
 table(tc@meta.data$cell_type)
 table(tc@meta.data$orig.ident, tc@meta.data$cell_type)
 
-##去除非免疫细胞
+##Remove non-immune cells
 tc_scRNA <- subset(x=tc, idents =c("Memory_like T","Cd8 T_Bcl2","Cd4 Activated T","Tregs","γδT cell",
                                     "Cd8 Cytotoxic T"))
 
@@ -176,8 +176,8 @@ saveRDS(tc_scRNA, file = "5tc_seurat_harmony.rds")
 TC <- readRDS("tc_seurat_harmony.rds")
 
 
-##ggplot绘图
-##提取前两个主成分数据
+##ggplot plotting
+##Extract the first two principal component coordinates
 # extact PC ranges
 pc12 <- Embeddings(object = tc_scRNA,reduction = 'umap') %>%
   data.frame()
@@ -185,7 +185,7 @@ pc12 <- Embeddings(object = tc_scRNA,reduction = 'umap') %>%
 # check
 head(pc12,3)
 
-##构造坐标轴需要的标签和位置信息
+##Build labels and positions needed for coordinate axes
 # get botomn-left coord
 lower <- floor(min(min(pc12$UMAP_1),min(pc12$UMAP_2))) - 2
 
@@ -204,7 +204,7 @@ axes <- data.frame(x = c(lower,lower,lower,linelen),y = c(lower,linelen,lower,lo
 label <- data.frame(lab = c('UMAP_2','UMAP_1'),angle = c(90,0),
                     x = c(lower - 3,mid),y = c(mid,lower - 2.5))
 
-##可视化
+##Visualization
 # plot
 color <- c("#f39c90", "#4DBBD5B2","#A9D179","#00A087B2","#F5AE6B","#CC79A7","#4387B5")
 
@@ -234,7 +234,7 @@ plot1
 ggsave('tc_group_umap_v2.png',plot1,width = 8,height = 8)
 
 
-##热图marker可视化
+##Heatmap marker visualization
 ##DotPlot
 genes_to_check = c("Il7r","Icos","Gzmk","Gzmb", 
                    "Chn2","Prkch","Bcl2", 
@@ -249,7 +249,7 @@ p
 ggsave("5tc_marker_dotplot.png", p, width=7,height=7)
 
 
-##小提琴图
+##Violin plot
 genes_to_check = c("Il7r","Icos","Gzmk","Gzmb", 
                    "Chn2","Prkch","Bcl2", 
                    "Ms4a4b","Tcf7", "Cd69","Cd28","Cd44",
@@ -281,9 +281,9 @@ ggsave("5tc_VlnPlot.png", p1, width=14,height=8)
 
 
 
-####不同分组各细胞比例统计图
+####Cell proportion plots across groups
 
-##加载R包
+##Load R packages
 options(stringsAsFactors = F)
 {
   library(densityClust)
@@ -312,8 +312,8 @@ options(stringsAsFactors = F)
   library(clustree)
   library(cowplot)
   library(dplyr)
-  library(tidyr)# 使用的gather & spread
-  library(reshape2) # 使用的函数 melt & dcast 
+  library(tidyr)# use gather & spread
+  library(reshape2) # use melt & dcast 
   library (gplots) 
   
 }
@@ -328,7 +328,7 @@ tb=table(phe$cell_type,
 
 head(tb)
 
-#统计细胞数量
+#Count cells
 balloonplot(tb, main ="tumor-T cells", xlab ="celltype", ylab="sample",
             label = T, show.margins = T)
 

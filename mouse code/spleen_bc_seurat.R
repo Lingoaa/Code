@@ -3,7 +3,7 @@ setwd("E:/spleen_alldata/NT_spleen_BC")
 rm(list=ls())
 set.seed(123)  
 
-##加载R包
+##Load R packages
 {
   library(densityClust)
   library(scran)
@@ -29,13 +29,13 @@ set.seed(123)
   
 }
 
-##导入数据
+##Import data
 exp <- readRDS("NT_spleen_BC_exp.rds")
 
 meta <- read.csv("NT_spleen_BC_meta.csv", row.names = 1)
 
 
-##初始化Seurat对象
+##Initialize Seurat object
 bc <- CreateSeuratObject(counts =exp , project = "b_cell", min.cells = 3) %>%
   Seurat::NormalizeData(verbose = FALSE) %>%
   FindVariableFeatures(selection.method = "vst", nfeatures = 2000) %>%
@@ -43,8 +43,8 @@ bc <- CreateSeuratObject(counts =exp , project = "b_cell", min.cells = 3) %>%
   RunPCA(pc.genes = bc@var.genes, npcs = 20, verbose = FALSE)
 
 
-##添加分组信息
-#分组信息
+##Add group information
+#Group information
 orig.ident <- meta$orig.ident
 names(orig.ident) <- colnames(x = bc)
 bc <- AddMetaData(
@@ -54,7 +54,7 @@ bc <- AddMetaData(
 )
 table(bc@meta.data$orig.ident)
 
-#样本信息
+#Sample information
 hash.ID <- meta$hash.ID
 names(hash.ID) <- colnames(x = bc)
 bc <- AddMetaData(
@@ -64,7 +64,7 @@ bc <- AddMetaData(
 )
 table(bc@meta.data$hash.ID)
 
-#group信息
+#group information
 group <- meta$group
 names(group) <- colnames(x = bc)
 bc <- AddMetaData(
@@ -107,7 +107,7 @@ bc <- RunUMAP(bc, reduction = "harmony", dims = 1:15)
 
 DimPlot(bc, reduction = "umap",label = T,pt.size = 0.5) 
 
-##找高变基因
+##Find highly variable genes
 markers <- FindAllMarkers(object = bc, test.use="wilcox" ,
                           only.pos = TRUE,
                           logfc.threshold = 0.25)   
@@ -131,7 +131,7 @@ new.cluster.ids <- c( "0" = "Follicular BC",
 names(new.cluster.ids) <- levels(bc)
 bc <- RenameIdents(bc, new.cluster.ids)
 
-#查看细胞数
+#Check cell counts
 table(bc@meta.data$orig.ident,bc@active.ident)
 table(bc@meta.data$hash.ID,bc@active.ident)
 
@@ -148,8 +148,8 @@ write.csv(bc@meta.data, "NT_sbc_meta.csv")
 
 saveRDS(bc, file = "NT_spleen_bc_seurat.rds")
 
-##ggplot绘图
-##提取前两个主成分数据
+##ggplot plotting
+##Extract the first two principal component coordinates
 # extact PC ranges
 pc12 <- Embeddings(object = bc,reduction = 'umap') %>%
   data.frame()
@@ -157,7 +157,7 @@ pc12 <- Embeddings(object = bc,reduction = 'umap') %>%
 # check
 head(pc12,3)
 
-##构造坐标轴需要的标签和位置信息
+##Build labels and positions needed for coordinate axes
 # get botomn-left coord
 lower <- floor(min(min(pc12$UMAP_1),min(pc12$UMAP_2))) - 2
 
@@ -176,7 +176,7 @@ axes <- data.frame(x = c(lower,lower,lower,linelen),y = c(lower,linelen,lower,lo
 label <- data.frame(lab = c('UMAP_2','UMAP_1'),angle = c(90,0),
                     x = c(lower - 3,mid),y = c(mid,lower - 2.5))
 
-##可视化
+##Visualization
 # plot
 color <- c("#f39c90", "#4DBBD5B2","#A9D179","#00A087B2","#F5AE6B","#CC79A7","#4387B5","#7E6148B2")
 color <- c("#f39c90","#4DBBD5B2", "#A9D179", '#4f9568', "#F5AE6B", '#c57aa9', '#4387B5', '#7E6148B2')
@@ -195,7 +195,7 @@ plot1
 
 
 
-##热图marker可视化
+##Heatmap marker visualization
 ##DotPlot
 genes_to_check = c("Ighd","Ccr7","Cd79a",
                    "Cr2","Dtx1","Myc","Pik3r4","Tm6sf1",
@@ -228,23 +228,23 @@ p2 = FeaturePlot(bc,features = c("Ighd","Ccr7","Cd79a",
 ggsave("marker_FeaturePlot.png", p2, width=12,height=10)
 
 
-##提取normal/tumor
+##Extract normal/tumor samples
 table(bc@meta.data$group)
 
-#提取normal
+#Extract normal samples
 N_bc <- subset(x = bc, subset = group == "normal")
 saveRDS(N_bc, file = "N_bc_seurat.rds")
 
 
-#提取tumor
+#Extract tumor samples
 T_bc <- subset(x = bc, subset = group == "tumor")
 saveRDS(T_bc, file = "T_bc_seurat.rds")
 
 rm(T_bc_exp)
 
-####不同分组各细胞比例统计图
+####Cell proportion plots across groups
 
-##加载R包
+##Load R packages
 options(stringsAsFactors = F)
 {
   library(densityClust)
@@ -273,14 +273,14 @@ options(stringsAsFactors = F)
   library(clustree)
   library(cowplot)
   library(dplyr)
-  library(tidyr)# 使用的gather & spread
-  library(reshape2) # 使用的函数 melt & dcast 
+  library(tidyr)# use gather & spread
+  library(reshape2) # use melt & dcast 
   library (gplots) 
   
 }
 
 
-#加载数据
+#Load data
 rm(phe)
 phe=T_bc@meta.data
 colnames(phe)
@@ -289,7 +289,7 @@ tb=table(phe$cell_type,
 
 head(tb)
 
-#统计细胞数量
+#Count cells
 balloonplot(tb, main ="Tumor spleen B cells", xlab ="celltype", ylab="sample",
             label = T, show.margins = T)
 
@@ -319,8 +319,8 @@ ggplot(bar_per, aes(x = percent, y = Var2)) +
 ggsave("NTbc_spleen.png",width = 8,height = 4)
 
 
-###不同分组中细胞亚群的比例
-##分为ko和wt组
+###Cell subtype proportions across groups
+##Split into KO and WT groups
 
 table(phe$cell_type)
 table(phe$hash.ID)
@@ -353,7 +353,7 @@ table(bar_per$Var1)
 bar_per$Var1 = factor(bar_per$Var1,levels =c('Follicular BC','MZ BC','GC BC','Plasmblast',
                                              'Pro/Pre BC','IFI+ BC','Transitional BC','Plasma cell'))
 
-###拼接7个箱线图
+###Combine seven boxplots
 library(gridExtra)
 library(ggpubr)
 
@@ -361,7 +361,7 @@ p <- list()
 
 col = c("#BD6263","#8EA325")
 for(i in 1:8){
-  # 选择当前细胞类型的数据
+  # Select data for the current cell type
   cell <- bar_per[bar_per$Var1 == unique(bar_per$Var1)[i],]
   
   p[[i]] <- ggplot(cell, aes(x = group, y = percent, fill = group)) +
@@ -379,13 +379,13 @@ for(i in 1:8){
           panel.grid.major = element_blank(),
           panel.grid.minor = element_blank()) +
     ylab("Fraction (%) of immune cells") + xlab(" ")
-  # 移除y轴标题和刻度标签
+  # Remove y-axis title and tick labels
   compaired = list(c("T-ko", "T-wt"))
   p[[i]] <- p[[i]] + theme(axis.title.y = element_blank())+
     geom_signif(comparisons = compaired,step_increase = 0.1,map_signif_level = T,test = t.test,tip_length = 0)
 }
 
-combined_plot <- grid.arrange(grobs = p, ncol = 4, left = "Fraction (%) of cells") # 设置共同的纵轴标题和拼图列数
+combined_plot <- grid.arrange(grobs = p, ncol = 4, left = "Fraction (%) of cells") # Set the shared y-axis title and number of columns in the combined plot
 
 print(combined_plot)
 

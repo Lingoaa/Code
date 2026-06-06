@@ -6,7 +6,7 @@ rds<- readRDS("bc_seurat_harmony.rds")
 
 exp <- readRDS("BC5_exp.rds")
 meta <- read.csv("BC5_meta.csv", row.names = 1)
-##初始化Seurat对象
+##Initialize Seurat object
 bc <- CreateSeuratObject(counts =exp , project = "b_cell", min.cells = 3) %>%
   Seurat::NormalizeData(verbose = FALSE) %>%
   FindVariableFeatures(selection.method = "vst", nfeatures = 2000) %>%
@@ -21,7 +21,7 @@ bc <- AddMetaData(
 )
 table(bc@meta.data$orig.ident)
 
-#样本信息
+#Sample information
 group <- meta$group
 names(group) <- colnames(x = bc)
 bc <- AddMetaData(

@@ -2,7 +2,7 @@ setwd("E:/all_scRNA")
 rm(list=ls())
 
 
-##加载R包
+##Load R packages
 BiocManager::install("ggsci")
 
 {
@@ -41,7 +41,7 @@ head(tb)
 
 library(gplots)
 
-#统计细胞数量
+#Count cells
 balloonplot(tb, main ="Immune_cells", xlab ="celltype", ylab="sample",
             label = T, show.margins = T)
 
@@ -69,8 +69,8 @@ ggplot(bar_per, aes(x = percent, y = Var2)) +
 ggsave("celltype_percent_tissue.png",width = 8,height = 8)
 
 
-###不同分组中细胞亚群的比例
-##分为ko和wt组
+###Cell subtype proportions across groups
+##Split into KO and WT groups
 
 table(phe$cell_type)
 table(phe$hash.ID)
@@ -102,7 +102,7 @@ table(bar_per$Var1)
 bar_per$Var1 = factor(bar_per$Var1,levels =c('B cells','T cells','Monocytes','Neutrophils',
                                              'Macrophages','DC','NK','Mast cells'))
 
-###拼接7个箱线图
+###Combine seven boxplots
 library(gridExtra)
 library(ggpubr)
 
@@ -110,7 +110,7 @@ p <- list()
 
 col = c("#F5AE6B","#b0d45d")
 for(i in 1:8){
-  # 选择当前细胞类型的数据
+  # Select data for the current cell type
   cell <- bar_per[bar_per$Var1 == unique(bar_per$Var1)[i],]
   
   p[[i]] <- ggplot(cell, aes(x = group, y = percent, fill = group)) +
@@ -128,13 +128,13 @@ for(i in 1:8){
           panel.grid.major = element_blank(),
           panel.grid.minor = element_blank()) +
     ylab("Fraction (%) of immune cells") + xlab(" ")
-  # 移除y轴标题和刻度标签
+  # Remove y-axis title and tick labels
   compaired = list(c("T-ko", "T-wt"))
   p[[i]] <- p[[i]] + theme(axis.title.y = element_blank())+
     geom_signif(comparisons = compaired,step_increase = 0.1,map_signif_level = T,test = t.test,tip_length = 0)
 }
 
-combined_plot <- grid.arrange(grobs = p, ncol = 4, left = "Fraction (%) of cells") # 设置共同的纵轴标题和拼图列数
+combined_plot <- grid.arrange(grobs = p, ncol = 4, left = "Fraction (%) of cells") # Set the shared y-axis title and number of columns in the combined plot
 
 print(combined_plot)
 

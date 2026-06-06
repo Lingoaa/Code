@@ -2,7 +2,7 @@ setwd("E:/NT_spleen_bc/N_slpeen_bc")
 
 rm(list=ls())
 
-##加载R包
+##Load R packages
 {
   library(densityClust)
   library(scran)
@@ -31,7 +31,7 @@ rm(list=ls())
   
 }
 
-##导入数据
+##Import data
 N_bc <- readRDS("N_bc_seurat.rds")
 
 N_bc
@@ -39,8 +39,8 @@ N_bc
 table(N_bc$cell_type)
 
 
-############分析B细胞大类的基因差异
-##提取Pro-B cell
+############analysis B cells
+##extract Pro-B cell
 PC <- subset(x=N_bc, cell_type == "Plasma cell")
 
 table(PC@meta.data$orig.ident)
@@ -48,15 +48,15 @@ table(PC@meta.data$orig.ident)
 PC$patientoutcone =  paste(PC$hash.ID, PC$orig.ident,sep = '_')
 
 
-# 通过Seurat的AverageExpression函数计算每个样本基因的平均表达量
+# Seurat AverageExpression calculate average expression
 avg <- AverageExpression(object = PC, assay = "RNA", group.by = "patientoutcone")
 a = avg$RNA
 
-#想要呈现的基因
+#
 
 C1 = c('Dhx9',"Ighg1","Ighg3","Igha","Jchain")
 
-#可视化
+#Visualization
 gene_boxplot <- function(gene){
   b = as.data.frame(a[gene,])
   colnames(b) = gene
@@ -110,8 +110,8 @@ ggsave('pro_gene_boxplot_C2.png', P_C2, width = 10,height = 12)
 
 
 
-##############差异基因分析
-##加载R包
+##############Differentially expressed genes analysis
+##Load R packages
 {
   library(densityClust)
   library(scran)
@@ -137,16 +137,16 @@ ggsave('pro_gene_boxplot_C2.png', P_C2, width = 10,height = 12)
   
 }
 
-##先分析大类B细胞
+##analysis B cells
 table(N_bc@meta.data$cell_type)
 
 Mem <- subset(x=bc, cell_type == "Memory B cells")
 
 ##DEGs
-#设置min.pct = 0.5参数过滤掉那些在50%以下细胞中检测到的基因 
+#set min.pct = 0.5 parameter 50% 
 DefaultAssay(N_bc) <- "RNA"
 
-#方法一
+#
 deg_bc <- FindMarkers(N_bc, min.pct = 0.1, 
                       logfc.threshold = 0.25,
                       group.by = "orig.ident",
@@ -157,18 +157,18 @@ deg_bc <- FindMarkers(N_bc, min.pct = 0.1,
 write.csv(deg_bc,"bc_DEG.csv")
 
 
-##方法二：计算差异基因
+##: calculate Differentially expressed genes
 dge.sample <- FindMarkers(N_bc, ident.1 = 'N-wt',ident.2 = 'N-wt',
                           group.by = 'orig.ident',logfc.threshold = 0,min.pct = 0)
 
-sig_dge.all <- subset(dge.sample, p_val_adj<0.05&abs(avg_log2FC)>0.25) #所有差异基因
+sig_dge.all <- subset(dge.sample, p_val_adj<0.05&abs(avg_log2FC)>0.25) #Differentially expressed genes
 View(sig_dge.all)
 
 write.csv(sig_dge.all,'bc_dge_0.25.csv')
 
 
 
-#火山图可视化
+#volcano plot Visualization
 library(EnhancedVolcano)
 
 EnhancedVolcano(deg_bc,

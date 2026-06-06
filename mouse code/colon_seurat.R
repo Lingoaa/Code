@@ -1,7 +1,7 @@
 setwd("E:/AOMDSS/filter_data")
 rm(list=ls())
 
-##加载R包
+##Load R packages
 {
   library(densityClust)
   library(scran)
@@ -29,7 +29,7 @@ rm(list=ls())
 }
 
 set.seed(123)  
-##导入数据
+##Import data
 
 load("5AOMDSS.RData")
 
@@ -113,7 +113,7 @@ DimPlot(scRNA, reduction = "umap",label = T,pt.size = 0.5)
 #scRNA <- RunTSNE(scRNA, reduction = "harmony", dims = 1:20)
 
 
-##去双胞方法
+##Doublet removal method
 vars.genes <- scRNA@assays[["RNA"]]@var.features
 
 spleen.sce <- as.SingleCellExperiment(scRNA)
@@ -130,7 +130,7 @@ DimPlot(scRNA, reduction = "umap",label = T,pt.size = 0.5)
 
 spleen.sce.dbl <- scDblFinder(spleen.sce, clusters=colData(spleen.sce)$seurat_clusters) 
 
-##结果可视化
+##results Visualization
 p1 <- plotUMAP(spleen.sce, colour_by = "DoubletScore")
 
 p2 <- plotUMAP(spleen.sce.dbl, colour_by="scDblFinder.score")
@@ -164,7 +164,7 @@ scRNA <- FindNeighbors(scRNA, reduction = "harmony", dims = 1:20) %>% FindCluste
 
 scRNA <- RunUMAP(scRNA, reduction = "harmony", dims = 1:20)
 
-##找高变基因
+##Find highly variable genes
 markers <- FindAllMarkers(object = scRNA, test.use="wilcox" ,
                           only.pos = TRUE,
                           logfc.threshold = 0.25)   
@@ -189,7 +189,7 @@ p <- DotPlot(scRNA, features = genes_to_check,assay='RNA' )  + RotatedAxis() + c
 p
 ggsave("5colon_dotplot.png", p, width=8,height=8)
 
-#细胞类型注释
+#Cell type annotation
 new.cluster.ids <- c("0" = "Neutrophils",
                      "1" = "Monocytes",
                      "2" = "Neutrophils",
@@ -209,7 +209,7 @@ scRNA <- RenameIdents(scRNA, new.cluster.ids)
 table(scRNA@meta.data$orig.ident,scRNA@active.ident)
 
 
-##去除非免疫细胞
+##Remove non-immune cells
 imm_scRNA <- subset(x=scRNA, idents =c("Neutrophils","Monocytes","Macrophages","T cells","DC","B cells","Mast cells"))
 
 imm_scRNA
@@ -220,7 +220,7 @@ table(imm_scRNA@meta.data$orig.ident,imm_scRNA@active.ident)
 
 rm(scRNA)
 
-#查看细胞数
+#Check cell counts
 table(imm_scRNA@meta.data$orig.ident,imm_scRNA@active.ident)
 
 ident <- data.frame(imm_scRNA@active.ident)
@@ -235,8 +235,8 @@ write.csv(imm_scRNA@meta.data, "5colon_imm_meta.csv")
 
 
 
-##ggplot绘图
-##提取前两个主成分数据
+##ggplot plotting
+##Extract the first two principal component coordinates
 # extact PC ranges
 pc12 <- Embeddings(object = imm_scRNA,reduction = 'umap') %>%
   data.frame()
@@ -244,7 +244,7 @@ pc12 <- Embeddings(object = imm_scRNA,reduction = 'umap') %>%
 # check
 head(pc12,3)
 
-##构造坐标轴需要的标签和位置信息
+##Build labels and positions needed for coordinate axes
 # get botomn-left coord
 lower <- floor(min(min(pc12$UMAP_1),min(pc12$UMAP_2))) - 2
 
@@ -263,7 +263,7 @@ axes <- data.frame(x = c(lower,lower,lower,linelen),y = c(lower,linelen,lower,lo
 label <- data.frame(lab = c('UMAP_2','UMAP_1'),angle = c(90,0),
                     x = c(lower - 3,mid),y = c(mid,lower - 2.5))
 
-##可视化
+##Visualization
 # plot
 color <- c("#eb998b", "#4DBBD5B2","#A9D179","#84CAC0","#F5AE6B","#6a51a3","#a14462")
 
@@ -312,7 +312,7 @@ plot3
 ggsave('imm_ident.png',plot3,width = 12,height = 8)
 
 
-##所有细胞marker
+##all cells marker
 genes_to_check = c("S100a9","S100a8","Retnlg","G0s2","Hdc",
                    "Plac8","Inhba","Plcb1","Fn1",
                    "Frmd4b","Mrc1","C1qc","C1qb","C1qa","Adgre1",
@@ -326,7 +326,7 @@ p <- DotPlot(imm_scRNA, features = genes_to_check,assay='RNA',cols = c(low="whit
 p
 ggsave("5imm_marker_dotplot.png", p, width=10,height=10)
 
-##小提琴图
+##Violin plot
 genes_to_check = c("G0s2",
                    "Inhba","Plcb1",
                    "Cd3g","Cd3e","Camk4",
@@ -368,10 +368,10 @@ saveRDS(imm_scRNA, file = "colon_imm_seurat.rds")
 scRNA <- readRDS("colon_imm_seurat.rds")
 
 
-##提取B/T cell
+##Extract B/T cells
 table(imm_scRNA@meta.data$cell_type)
 
-#提取B cell
+#extract B cell
 BC5 <- subset(x=imm_scRNA, idents =c("B cells"))
 BC5_exp <- as.matrix(BC5@assays$RNA@counts)
 saveRDS(BC5_exp, file = "BC5_exp.rds")
@@ -381,7 +381,7 @@ saveRDS(BC5, file = "BC5_seurat.rds")
 rm(ident,label,all.genes)
 rm(BC5,BC5_exp)
 
-#提取T cell
+#extract T cell
 TC5 <- subset(x=imm_scRNA, cell_type == "T cells")
 TC5_exp <- as.matrix(TC5@assays$RNA@counts)
 saveRDS(TC5_exp, file = "TC5_exp.rds")

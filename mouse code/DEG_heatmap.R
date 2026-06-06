@@ -2,7 +2,7 @@ setwd("E:/spleen_alldata/NT_spleen_BC/normal_SBC/GC")
 
 rm(list=ls())
 
-##加载R包
+##Load R packages
 
 {
   library(Seurat)
@@ -23,7 +23,7 @@ rm(list=ls())
   
 }
 
-##导入数据
+##Import data
 bc <- readRDS("N_bc_seurat.rds")
 
 table(bc@meta.data$cell_type)
@@ -32,7 +32,7 @@ GC <- subset(x=bc, cell_type == "GC BC")
 table(GC$orig.ident)
 
 
-#单细胞差异分析
+#Single-cell differential expression analysis
 markers_bc <- FindMarkers(GC, min.pct = 0.1, 
                       logfc.threshold = 0,
                       slot = 'data',
@@ -42,7 +42,7 @@ markers_bc <- FindMarkers(GC, min.pct = 0.1,
                       random.seed = 1) 
 
 
-##绘制火山图
+##Draw volcano plot
 DESeq2_result <- markers_bc
 DESeq2_result$logP <- -log(DESeq2_result$p_val_adj,base = 20)
 DESeq2_result$Group <- 'non-significant'
@@ -79,10 +79,10 @@ plot1
 ggsave('GC_deg_volcano.pdf',plot1,width = 9,height = 6)
 colon_DEG_Fob <-  filter(DESeq2_result,Group!='non-significant')
 write.csv(colon_DEG_Fob,'GC_sig_0.05.csv')
-DEGs <- rownames(colon_DEG_Fob)#差异基因
+DEGs <- rownames(colon_DEG_Fob)#Differentially expressed genes
 
 
-#所有差异基因go富集分析
+#GO enrichment analysis for all DEGs
 go_BP <- enrichGO( DEGs,
                    OrgDb = 'org.Mm.eg.db',
                    keyType = 'SYMBOL',
@@ -99,7 +99,7 @@ go_fil <- go_fil %>% subset(.,qvalue<0.05)
 go_fil <- go_fil[order(go_fil$Count,decreasing = T),]
 write.csv(go_fil,'GC_BP_alldeg.csv')
 
-##go结果可视化
+##GO result visualization
 go_fil2 <- go_fil[1:20,]
 datbar <- go_fil2[,c(2,6,9)]
 datbar$Term <- factor(datbar$Description,levels = rev(datbar$Description))
@@ -119,7 +119,7 @@ ggsave('GC_alldeg_BP.pdf',plot2,width = 9,height = 6)
 
 
 #####################################################
-##分出KO与WT差异基因
+##Separate KO and WT DEGs
 sig_dge.up <- subset(markers_bc, p_val_adj<0.05&avg_log2FC>0.25)
 sig_dge.up <- sig_dge.up[order(sig_dge.up$avg_log2FC,decreasing = T),]
 write.csv(sig_dge.up,'GC_dge_ko.csv')
@@ -134,7 +134,7 @@ write.csv(sig_dge.down,'GC_dge_wt.csv')
 egoALL <- enrichGO(gene = row.names(sig_dge.up),
                    OrgDb = 'org.Mm.eg.db',
                    keyType = 'SYMBOL',
-                   ont = "ALL", #设置为ALL时BP, CC, MF都计算
+                   ont = "ALL", #When set to ALL, BP, CC, and MF are all calculated
                    pAdjustMethod = "BH",
                    pvalueCutoff = 0.05,
                    qvalueCutoff = 0.05,
@@ -150,7 +150,7 @@ View(ego_all)
 egoALL_wt <- enrichGO(gene = row.names(sig_dge.down),
                       OrgDb = 'org.Mm.eg.db',
                       keyType = 'SYMBOL',
-                      ont = "ALL", #设置为ALL时BP, CC, MF都计算
+                      ont = "ALL", #When set to ALL, BP, CC, and MF are all calculated
                       pAdjustMethod = "BH",
                       pvalueCutoff = 0.05,
                       qvalueCutoff = 0.05,

@@ -2,7 +2,7 @@ setwd("E:/spleen_alldata/NT_spleen_TC")
 
 rm(list=ls())
 
-##加载R包
+##Load R packages
 {
   library(densityClust)
   library(scran)
@@ -30,15 +30,15 @@ rm(list=ls())
 
 set.seed(123) 
 
-###导入数据
+###Import data
 #######normal
-##导入数据
+##Import data
 exp <- readRDS("NT_spleen_TC_exp.rds")
 
 meta <- read.csv("NT_spleen_TC_meta.csv", row.names = 1)
 
 
-##初始化Seurat对象
+##Initialize Seurat object
 TC <- CreateSeuratObject(counts =exp , project = "T_cell", min.cells = 3) %>%
   Seurat::NormalizeData(verbose = FALSE) %>%
   FindVariableFeatures(selection.method = "vst", nfeatures = 2000) %>%
@@ -46,8 +46,8 @@ TC <- CreateSeuratObject(counts =exp , project = "T_cell", min.cells = 3) %>%
   RunPCA(pc.genes = TC@var.genes, npcs = 20, verbose = FALSE)
 
 
-##添加分组信息
-#分组信息
+##Add group information
+#Group information
 orig.ident <- meta$orig.ident
 names(orig.ident) <- colnames(x = TC)
 TC <- AddMetaData(
@@ -57,7 +57,7 @@ TC <- AddMetaData(
 )
 table(TC@meta.data$orig.ident)
 
-#样本信息
+#Sample information
 hash.ID <- meta$hash.ID
 names(hash.ID) <- colnames(x = TC)
 TC <- AddMetaData(
@@ -67,7 +67,7 @@ TC <- AddMetaData(
 )
 table(TC@meta.data$hash.ID)
 
-#group信息
+#group information
 group <- meta$group
 names(group) <- colnames(x = TC)
 TC <- AddMetaData(
@@ -113,7 +113,7 @@ TC <- RunUMAP(TC, reduction = "harmony", dims = 1:20)
 
 DimPlot(TC, reduction = "umap",label = T,pt.size = 0.6) 
 
-##找高变基因
+##Find highly variable genes
 markers <- FindAllMarkers(object = TC, test.use="wilcox" ,
                           only.pos = TRUE,
                           logfc.threshold = 0.25)   
@@ -151,7 +151,7 @@ new.cluster.ids <- c("0" = "Naive Cd4+ TC",
 names(new.cluster.ids) <- levels(TC)
 TC <- RenameIdents(TC, new.cluster.ids)
 
-#查看细胞数
+#Check cell counts
 table(TC@meta.data$orig.ident,TC@active.ident)
 
 ident <- data.frame(TC@active.ident)
@@ -164,7 +164,7 @@ table(TC@meta.data$cell_type)
 table(TC@meta.data$hash.ID, TC@meta.data$cell_type)
 
 
-##去除非T细胞
+##Remove non-T cells
 TC_scRNA <- subset(x=TC, idents =c("Naive Cd4+ TC","Naive Cd8+ TC","Tregs","Cd8+ NKT","Effector Memory Cd4+ TC","Tfh"))
 
 TC_scRNA
@@ -188,8 +188,8 @@ p1 = FeaturePlot(TC_scRNA,features = c("Ly6c1","Igfbp4","Ccr7","Selenop",
 
 ggsave("marker_FeaturePlot.png", p1, width=18,height=7)
 
-##ggplot绘图
-##提取前两个主成分数据
+##ggplot plotting
+##Extract the first two principal component coordinates
 # extact PC ranges
 pc12 <- Embeddings(object = TC_scRNA,reduction = 'umap') %>%
   data.frame()
@@ -197,7 +197,7 @@ pc12 <- Embeddings(object = TC_scRNA,reduction = 'umap') %>%
 # check
 head(pc12,3)
 
-##构造坐标轴需要的标签和位置信息
+##Build labels and positions needed for coordinate axes
 # get botomn-left coord
 lower <- floor(min(min(pc12$UMAP_1),min(pc12$UMAP_2))) - 2
 
@@ -216,7 +216,7 @@ axes <- data.frame(x = c(lower,lower,lower,linelen),y = c(lower,linelen,lower,lo
 label <- data.frame(lab = c('UMAP_2','UMAP_1'),angle = c(90,0),
                     x = c(lower - 3,mid),y = c(mid,lower - 2.5))
 
-##可视化
+##Visualization
 # plot
 color <- c("#eb998b", "#4DBBD5B2","#A9D179","#84CAC0","#6a51a3","#a14462")
 
@@ -268,10 +268,10 @@ plot3 <- DimPlot(TC_scRNA, reduction = 'umap', label = F,repel = TRUE,
 plot3
 
 
-####提取normal/tumor
+####Extract normal/tumor samples
 table(TC_scRNA@meta.data$group)
 
-#提取normal
+#Extract normal samples
 N_TC <- subset(x = TC_scRNA, subset = group == "normal")
 #N_TC_exp <- as.matrix(N_TC@assays$RNA@counts)
 #saveRDS(N_TC_exp, file = "N_TC_exp.rds")
@@ -281,7 +281,7 @@ saveRDS(N_TC, file = "N_TC_seurat.rds")
 
 rm(N_TC_exp)
 
-#提取tumor
+#Extract tumor samples
 T_TC <- subset(x = TC_scRNA, subset = group == "tumor")
 
 #T_TC_exp <- as.matrix(T_TC@assays$RNA@counts)
@@ -293,9 +293,9 @@ saveRDS(T_TC, file = "T_TC_seurat.rds")
 rm(T_TC_exp)
 
 
-####不同分组各细胞比例统计图
+####Cell proportion plots across groups
 
-##加载R包
+##Load R packages
 options(stringsAsFactors = F)
 {
   library(densityClust)
@@ -324,14 +324,14 @@ options(stringsAsFactors = F)
   library(clustree)
   library(cowplot)
   library(dplyr)
-  library(tidyr)# 使用的gather & spread
-  library(reshape2) # 使用的函数 melt & dcast 
+  library(tidyr)# use gather & spread
+  library(reshape2) # use melt & dcast 
   library (gplots) 
   
 }
 
 
-#加载数据
+#Load data
 load("")
 TC <- readRDS("TC_seurat_harmony.rds")
 TC
@@ -344,7 +344,7 @@ tb=table(phe$cell_type,
 
 head(tb)
 
-#统计细胞数量
+#Count cells
 balloonplot(tb, main ="Tumor-spleen T cells", xlab ="celltype", ylab="sample",
             label = T, show.margins = T)
 

@@ -2,7 +2,7 @@ setwd("E:/spleen_alldata/NT_spleen_BC/normal_SBC")
 
 rm(list=ls())
 
-##加载R包
+##Load R packages
 {
   library(densityClust)
   library(scran)
@@ -28,7 +28,7 @@ rm(list=ls())
   
 }
 
-##导入数据
+##Import data
 bc <- readRDS("N_bc_seurat.rds")
 
 table(bc@meta.data$cell_type)
@@ -36,7 +36,7 @@ table(bc@meta.data$cell_type)
 Fob <- subset(x=bc, cell_type == "Follicular BC")
 
 ##DEGs
-#设置min.pct = 0.5参数过滤掉那些在50%以下细胞中检测到的基因 
+#set min.pct = 0.5 parameter 50% 
 DefaultAssay(Fob) <- "RNA"
 
 deg_bc <- FindMarkers(Fob, min.pct = 0.1, 
@@ -49,18 +49,18 @@ deg_bc <- FindMarkers(Fob, min.pct = 0.1,
 write.csv(deg_bc,"Normal_Fob_DEG.csv")
 
 
-##计算差异基因
+##calculate Differentially expressed genes
 dge.sample <- FindMarkers(Fob, ident.1 = 'N-ko',ident.2 = 'N-wt',
                           group.by = 'orig.ident',logfc.threshold = 0,min.pct = 0)
 
-sig_dge.all <- subset(dge.sample, p_val_adj<0.05&abs(avg_log2FC)>0.25) #所有差异基因
+sig_dge.all <- subset(dge.sample, p_val_adj<0.05&abs(avg_log2FC)>0.25) #Differentially expressed genes
 View(sig_dge.all)
 
 write.csv(sig_dge.all,'Normal_Fob_allDEG.csv')
 
 
 
-#火山图可视化
+#volcano plot Visualization
 library(EnhancedVolcano)
 
 EnhancedVolcano(sig_dge.all,

@@ -49,7 +49,7 @@ dev.off()
 pdf("Bcellspleen_celltype_Dhx9.pdf",width=5.5,height=4)
 FeatureStatPlot(rds, stat.by = c("Dhx9"), group.by = "cell_type")+theme(legend.text=element_text(size=11),legend.spacing.y = unit(9, "cm"))
 dev.off()
-##follicular BC 中WT和KO差异通路富集
+##Differential pathway enrichment between WT and KO in follicular BC
 rds2<- rds[,rds$cell_type=="Follicular BC"]
 rds2$group2<- substr(rds2$orig.ident,3,4)
 rds2$group2<- ifelse(rds2$group2=="wt","WT","KO")
@@ -72,7 +72,7 @@ EnrichmentPlot(
   plot_type = "network"
 )+theme(legend.text=element_text(size=11),legend.key.size=unit(1.2,'cm'))
 dev.off()
-####T-ko和t-wt中FBC的比较
+####Comparison of FBC between T-KO and T-WT
 rds2<- rds2[,rds2$orig.ident %in% c("T-wt","T-ko")]
 rds2$orig.ident<- ifelse(rds2$orig.ident=="T-ko","T-KO","T-WT")
 pdf("FBC-T-gene.pdf",width=12,height=3.5)

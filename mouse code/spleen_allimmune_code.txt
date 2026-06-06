@@ -16,7 +16,7 @@ scRNA_spleen <- ScaleData(scRNA_spleen, features = all.genes)
 scRNA_spleen <- RunPCA(scRNA_spleen, features = VariableFeatures(object = scRNA_spleen))
 scRNA_spleen <- FindNeighbors(scRNA_spleen, reduction = "pca", dims = 1:20) %>% FindClusters(resolution = 0.1)
 scRNA_spleen <- RunUMAP(scRNA_spleen, dims = 1:20)
-#过滤双细胞
+#Filter doublets
 combo<- scRNA_spleen
 sweep.res.list <- paramSweep(combo, PCs = 1:15, sct = F)
 sweep.stats <- summarizeSweep(sweep.res.list, GT = FALSE)

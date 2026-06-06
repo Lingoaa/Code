@@ -1,9 +1,9 @@
 setwd("D:/Desktop/RData/mice_scRNA/GEX+ADT/spleen_identify/B_cell")
 
-##清空环境
+##Clear environment
 rm(list=ls())
 
-##加载R包
+##Load R packages
 library(Seurat)
 library(GSVA)
 library(tidyverse)
@@ -13,13 +13,13 @@ library(org.Mm.eg.db)
 library(dplyr)
 library(readxl)
 
-##加载数据
+##Load data
 bc <- readRDS("bc_seurat_harmony.rds")
 
 table(bc@meta.data$orig.ident)
 
-meta <- bc@meta.data[,c("orig.ident","group")]#分组信息，为了后续作图
-bc <- as.matrix(bc@assays$RNA@counts)#提取count矩阵
+meta <- bc@meta.data[,c("orig.ident","group")]#Group information for later plotting
+bc <- as.matrix(bc@assays$RNA@counts)#Extract count matrix
 
 library(msigdbr)
 
@@ -31,46 +31,46 @@ mouse[1:5,1:5]
 
 table(mouse$gs_cat) 
 
-#提取GO文件
+#Extract GO file
 table(mouse$gs_subcat)
 
 mouse_GO_bp = msigdbr(species = "Mus musculus",
-                      category = "C5", #GO在C5
+                      category = "C5", #GO is in C5
                       subcategory = "GO:BP") %>% 
-  dplyr::select(gs_name,gene_symbol)#这里可以选择gene symbol，也可以选择ID，根据自己数据需求来，主要为了方便
-mouse_GO_bp_Set = mouse_GO_bp %>% split(x = .$gene_symbol, f = .$gs_name)#后续gsva要求是list，所以将他转化为list
+  dplyr::select(gs_name,gene_symbol)#Here you can choose gene symbols or IDs depending on your data needs, mainly for convenience
+mouse_GO_bp_Set = mouse_GO_bp %>% split(x = .$gene_symbol, f = .$gs_name)#GSVA requires a list later, so convert it to a list
 
-#表达矩阵数据有了，通路信息有了，就可以进行GSVA分析了
+#After the expression matrix and pathway information are ready, GSVA analysis can be run
 
 T_gsva <- gsva(expr = bc, 
                gset.idx.list = mouse_GO_bp_Set,
-               kcdf="Poisson", #查看帮助函数选择合适的kcdf方法 
+               kcdf="Poisson", #Check the help function to choose an appropriate kcdf method 
                parallel.sz = 5)
 
 write.table(T_gsva, '5bc_gsva.xlsx', row.names=T, col.names=NA, sep="\t")
 
 T_gsva <- read_excel("D:/Desktop/RData/mice_scRNA/GEX+ADT/spleen_identify/B_cell/Fob/Fob_gsva.xlsx")
 
-#用limma包进行差异分析可以
+#Use the limma package for differential analysis
 library(edgeR)
 library(limma)
 
 table(bc@meta.data$group)
 
-#设置分组
-group <- c(rep("WT", 2167), rep("CKO", 189)) %>% as.factor()#设置分组，对照在前
-desigN <- model.matrix(~ 0 + group) #构建比较矩阵
+#Set groups
+group <- c(rep("WT", 2167), rep("CKO", 189)) %>% as.factor()#Set groups with the control first
+desigN <- model.matrix(~ 0 + group) #Build comparison matrix
 colnames(desigN) <- levels(group)
 
-#设置阈值
+#Set thresholds
 #logFCcutoff <- log2(1.5)
 logFCcutoff <- log2(1.2)
-PvalueCutoff <- 0.05      #这里使用未调整p值
+PvalueCutoff <- 0.05      #Use the unadjusted p value here
 
-#limma通路差异分析:mcao vs sham
+#limma pathway differential analysis: mcao vs sham
 fit = lmFit(T_gsva, desigN)
 fit2 <- eBayes(fit)
-diff=topTable(fit2,adjust='fdr',coef=2,number=Inf)#校准按照需求修改 ？topTable
+diff=topTable(fit2,adjust='fdr',coef=2,number=Inf)#Adjust as needed; topTable
 
 DEgeneSets <- diff[(diff$P.Value < PvalueCutoff & (diff$logFC>logFCcutoff | diff$logFC < (-logFCcutoff))),]
 
@@ -78,7 +78,7 @@ write.csv(DEgeneSets, file = "5bc_GSVA_pathway_1.2.xlsx")
 
 DEgeneSets <- read_excel("Naive_Cd4_GSVA_DEG.xlsx")
 
-#热图展示
+#Show heatmap
 pheatmap::pheatmap(T_gsva[rownames(DEgeneSets,),],
                    show_rownames = T,
                    show_colnames = T)
@@ -88,7 +88,7 @@ p = pheatmap::pheatmap(T_gsva[rownames(DEgeneSets,),],
 ggsave('pro_gsva.png', p,width = 25,height = 15)
 
 
-#最后对差异的感兴趣的通路进行可视化
+#Finally visualize the differential pathways of interest
 ko_up <- c("GOBP_PHAGOCYTOSIS_RECOGNITION",
            "GOBP_COMPLEMENT_ACTIVATION",
            "GOBP_HUMORAL_IMMUNE_RESPONSE_MEDIATED_BY_CIRCULATING_IMMUNOGLOBULIN")
@@ -106,26 +106,26 @@ diff$ID <- rownames(diff)
 Q <- diff[TEST,]
 group1 <- c(rep("ko_up", 3), rep("wt_up", 9)) 
 df <- data.frame(ID = Q$ID, score = Q$t,group=group1 )
-# 按照t score排序
+# Sort by t score
 sortdf <- df[order(df$score),]
-sortdf$ID <- factor(sortdf$ID, levels = sortdf$ID)#增加通路ID那一列
+sortdf$ID <- factor(sortdf$ID, levels = sortdf$ID)#Add the pathway ID column
 
 ggplot(sortdf, aes(ID, score,fill=group)) + geom_bar(stat = 'identity',alpha = 0.7) + 
   coord_flip() + 
-  theme_bw() + #去除背景色
+  theme_bw() + #Remove background color
   theme(panel.grid =element_blank())+
   theme(panel.border = element_rect(size = 0.6))+
   labs(x = "",
        y="t value of GSVA score")+
-  scale_fill_manual(values = c("red","blue"))#设置颜色
+  scale_fill_manual(values = c("red","blue"))#Set colors
 
 p = ggplot(sortdf, aes(ID, score,fill=group)) + geom_bar(stat = 'identity',alpha = 0.7) + 
   coord_flip() + 
-  theme_bw() + #去除背景色
+  theme_bw() + #Remove background color
   theme(panel.grid =element_blank())+
   theme(panel.border = element_rect(size = 0.6))+
   labs(x = "",
        y="t value of GSVA score")+
-  scale_fill_manual(values = c("#008020","#08519C"))#设置颜色
+  scale_fill_manual(values = c("#008020","#08519C"))#Set colors
 
 ggsave('PC_gsva.png', p, width = 20,height = 8)

@@ -90,7 +90,7 @@ rds2<- rds[,rds$orig.ident %in% c("N-wt","N-ko")]
 pdf("tcellspleen_group_celltype_percent.pdf",width=6.5,height=4,onefile=F)
 CellStatPlot(rds2, stat.by = c("cell_type", "orig.ident"), plot_type = "sankey")
 dev.off()
-##差异通路
+##Differential pathways
 rds2<- rds2[,rds2$cell_type=="Naive CD4+ TC"]
 rds2 <- RunDEtest(srt = rds2, group_by = "orig.ident", fc.threshold = 1, only.pos = FALSE)
 rds2 <- RunEnrichment(

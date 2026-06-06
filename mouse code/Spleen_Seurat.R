@@ -1,7 +1,7 @@
 rm(list = ls())
 setwd('/home/rongge/QQ')
 
-##加载R包
+##Load R packages
 
 {
   library(densityClust)
@@ -31,7 +31,7 @@ setwd('/home/rongge/QQ')
 
 set.seed(123)
 
-##加载数据
+##Load data
 load("NTimmu_spleen.RData")
 
 DefaultAssay(scRNA_spleen) <- "RNA"
@@ -108,20 +108,20 @@ ggsave('降维_spleen.png' , p , width = 12,height = 9)
 scRNA_spleen
 
 
-##去双胞方法
+##Doublet removal method
 vars.genes <- scRNA_spleen@assays[["RNA"]]@var.features
 
 spleen.sce <- as.SingleCellExperiment(scRNA_spleen)
 
 
-# 方法一：基于模拟方法
+# Method 1: simulation-based method
 dbl.dens <- computeDoubletDensity(spleen.sce, subset.row=vars.genes, d=ncol(reducedDim(spleen.sce)))
 
 spleen.sce$DoubletScore <- dbl.dens
 
 dbl.calls <- doubletThresholding(data.frame(score=dbl.dens),method="griffiths", returnType="call", )
 
-# 方法二：基于聚类结果
+# Method 2: cluster-based method
 scRNA_spleen <- FindNeighbors(scRNA_spleen, reduction = "harmony", dims = 1:20) %>% FindClusters(resolution = 0.1)
 scRNA_spleen <- RunUMAP(scRNA_spleen, reduction = "harmony", dims = 1:20)
 DimPlot(scRNA_spleen, reduction = "umap",label = T,pt.size = 0.5)
@@ -152,7 +152,7 @@ DimPlot(scRNA_spleen, reduction = "umap",label = T,pt.size = 0.1)
 library(viridis)
 
 
-#细胞类型注释
+#Cell type annotation
 new.cluster.ids <- c("0" = "B cells",
                                 "1" = "T cells",
                                 "2" = "other",
@@ -169,7 +169,7 @@ scRNA_spleen <- RenameIdents(scRNA_spleen, new.cluster.ids)
 
 table(scRNA_spleen@meta.data$orig.ident,scRNA_spleen@active.ident)
 
-##去除非免疫细胞
+##Remove non-immune cells
 imm_scRNA <- subset(x=scRNA_spleen, idents =c("Neutrophils","Monocytes","Macrophages","T cells","DC","B cells","Mast cells","NK"))
 
 imm_scRNA
@@ -178,7 +178,7 @@ table(imm_scRNA@meta.data$hash.ID,imm_scRNA@active.ident)
 
 rm(scRNA)
 
-#查看细胞数
+#Check cell counts
 table(imm_scRNA@meta.data$hash.ID,imm_scRNA@active.ident)
 
 ident <- data.frame(imm_scRNA@active.ident)
@@ -199,9 +199,9 @@ saveRDS(imm_exp, file = "allimm_spleen_exp.rds")
 
 rm(scRNA_spleen)
 
-##ggplot画图
-##绘图
-##提取前两个主成分数据
+##ggplot plotting
+##Plotting
+##Extract the first two principal component coordinates
 # extact PC ranges
 pc12 <- Embeddings(object = imm_scRNA,reduction = 'umap') %>%
   data.frame()
@@ -209,7 +209,7 @@ pc12 <- Embeddings(object = imm_scRNA,reduction = 'umap') %>%
 # check
 head(pc12,3)
 
-##构造坐标轴需要的标签和位置信息
+##Build labels and positions needed for coordinate axes
 # get botomn-left coord
 lower <- floor(min(min(pc12$UMAP_1),min(pc12$UMAP_2))) - 2
 
@@ -261,7 +261,7 @@ plot2 <- DimPlot(imm_scRNA, reduction = 'umap', label = F,
 plot2
 
 
-##绘制 DotPlot
+##Draw DotPlot
 genes_to_check = c("Cd79b","Cd79a","Ebf1","Ly6d","Bank1",
                    "Cd3d","Cd3e","Cd3g",
                    "S100a8","S100a9",
@@ -296,10 +296,10 @@ ggsave("imm_marker_FeaturePlot.png", p1, width=16,height=7)
 
 rm(scRNA_spleen)
 
-##提取normal/tumor
+##Extract normal/tumor samples
 table(imm_scRNA@meta.data$group)
 
-#提取normal
+#Extract normal samples
 N_spleen_imm <- subset(x = imm_scRNA, subset = group == "normal")
 N_spleen_imm_exp <- as.matrix(N_spleen_imm@assays$RNA@counts)
 saveRDS(N_spleen_imm_exp, file = "N_spleen_imm_exp.rds")
@@ -320,7 +320,7 @@ plot1 <- DimPlot(T_spleen_imm, reduction = 'umap', label = T,
             aes(x = x,y = y,angle = angle,label = lab))
 plot1
 
-#提取tumor
+#Extract tumor samples
 T_spleen_imm <- subset(x = imm_scRNA, subset = group == "tumor")
 T_spleen_imm_exp <- as.matrix(T_spleen_imm@assays$RNA@counts)
 saveRDS(T_spleen_imm_exp, file = "T_spleen_imm_exp.rds")
@@ -329,7 +329,7 @@ write.csv(T_spleen_imm@meta.data, "T_spleen_imm_meta.csv")
 
 rm(T_spleen_imm_exp)
 
-##提取B/T cell
+##Extract B/T cells
 BC <- subset(x=imm_scRNA, cell_type == "B cells")
 TC <- subset(x=imm_scRNA, cell_type == "T cells")
 

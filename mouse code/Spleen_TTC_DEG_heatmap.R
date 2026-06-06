@@ -2,7 +2,7 @@ setwd("E:/spleen_alldata/NT_spleen_TC/tumor_STC")
 
 rm(list=ls())
 
-##加载R包
+##Load R packages
 
 {
   library(Seurat)
@@ -23,7 +23,7 @@ rm(list=ls())
   
 }
 
-##导入数据
+##Import data
 TC <- readRDS("T_TC_seurat.rds")
 
 table(TC@meta.data$cell_type)
@@ -31,7 +31,7 @@ table(TC@meta.data$cell_type)
 Naive_CD8 <- subset(x=TC, cell_type == "Naive Cd8+ TC")
 table(Naive_CD8$orig.ident)
 
-#单细胞差异分析
+#Single-cell differential expression analysis
 markers_bc <- FindMarkers(Naive_CD8, min.pct = 0.1, 
                       logfc.threshold = 0,
                       slot = 'data',
@@ -41,7 +41,7 @@ markers_bc <- FindMarkers(Naive_CD8, min.pct = 0.1,
                       random.seed = 1) 
 
 
-##绘制火山图
+##Draw volcano plot
 DESeq2_result <- markers_bc
 DESeq2_result$logP <- -log(DESeq2_result$p_val_adj,base = 20)
 DESeq2_result$Group <- 'non-significant'
@@ -78,10 +78,10 @@ plot1
 ggsave('colon_Fob_deg_volcano.pdf',plot1,width = 9,height = 6)
 colon_DEG_Fob <-  filter(DESeq2_result,Group!='non-significant')
 write.csv(colon_DEG_Fob,'colon_Fob_sig_0.05.csv')
-DEGs <- rownames(colon_DEG_Fob)#差异基因
+DEGs <- rownames(colon_DEG_Fob)#Differentially expressed genes
 
 
-#所有差异基因go富集分析
+#GO enrichment analysis for all DEGs
 go_BP <- enrichGO( DEGs,
                    OrgDb = 'org.Mm.eg.db',
                    keyType = 'SYMBOL',
@@ -98,7 +98,7 @@ go_fil <- go_fil %>% subset(.,qvalue<0.05)
 go_fil <- go_fil[order(go_fil$Count,decreasing = T),]
 write.csv(go_fil,'colon_Fob_BP_alldeg.csv')
 
-##go结果可视化
+##GO result visualization
 go_fil2 <- go_fil[1:30,]
 datbar <- go_fil2[,c(2,6,9)]
 datbar$Term <- factor(datbar$Description,levels = rev(datbar$Description))
@@ -118,7 +118,7 @@ ggsave('colon_fob_alldeg_BP.pdf',plot2,width = 12,height = 6)
 
 
 #####################################################
-##分出KO与WT差异基因
+##Separate KO and WT DEGs
 sig_dge.up <- subset(markers_bc, p_val_adj<0.05&avg_log2FC>0.25)
 sig_dge.up <- sig_dge.up[order(sig_dge.up$avg_log2FC,decreasing = T),]
 write.csv(sig_dge.up,'TS_Fob_dge_ko.csv')
@@ -133,7 +133,7 @@ write.csv(sig_dge.down,'TS_Fob_dge_wt.csv')
 egoALL <- enrichGO(gene = row.names(sig_dge.up),
                    OrgDb = 'org.Mm.eg.db',
                    keyType = 'SYMBOL',
-                   ont = "ALL", #设置为ALL时BP, CC, MF都计算
+                   ont = "ALL", #When set to ALL, BP, CC, and MF are all calculated
                    pAdjustMethod = "BH",
                    pvalueCutoff = 0.05,
                    qvalueCutoff = 0.05,
@@ -145,14 +145,14 @@ ego_all <- data.frame(egoALL)
 write.csv(egoALL, 'TS_Fob_enrichGO_all_ko.csv')
 View(ego_all)
 
-#导入数据
+#Import data
 library(ggplot2)
 library(dplyr)
 library(readxl)
 
 go_fil2 <- read_excel("TS_Naive_Cd8_BP_ko可视化.xlsx")
 
-##go结果可视化
+##GO result visualization
 go_fil2 <- go_fil[1:20,]
 datbar <- go_fil2[,c(4,8,11)]
 datbar$Term <- factor(datbar$Description,levels = rev(datbar$Description))
@@ -175,7 +175,7 @@ ggsave('Naive Cd8_BP_ko.pdf',plot2,width = 8,height = 6)
 egoALL_wt <- enrichGO(gene = row.names(sig_dge.down),
                       OrgDb = 'org.Mm.eg.db',
                       keyType = 'SYMBOL',
-                      ont = "ALL", #设置为ALL时BP, CC, MF都计算
+                      ont = "ALL", #When set to ALL, BP, CC, and MF are all calculated
                       pAdjustMethod = "BH",
                       pvalueCutoff = 0.05,
                       qvalueCutoff = 0.05,
